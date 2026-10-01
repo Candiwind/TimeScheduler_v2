@@ -1,1 +1,10 @@
 ref/
+cc_setup/
+
+# ---- Capacitor 打包产物（见 DS 1.2）----
+# 这三样都是「跑一下命令就会重新生成」的，不该进版本库。
+# 尤其是 www/：它是 tools/copy-web.js 从根目录拷出来的，
+# 手改 www/ 里的东西下次打包就会被覆盖掉。
+node_modules/
+www/
+android/

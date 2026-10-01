@@ -1,0 +1,1131 @@
+/* ===========================================================================
+   style.css —— 全部外观集中在这里（见 DS 1.2）
+   =========================================================================== */
+
+/* ---------------------------------------------------------------------------
+   主题变量。切换主题 = 给 <html> 换个 data-theme，颜色跟着变。
+   主题是本机偏好，不进用户数据（见 DS 2.2 / D-11）。
+   --------------------------------------------------------------------------- */
+:root {
+  --bg: #f5f6f8;
+  --surface: #ffffff;
+  --text: #1f2329;
+  --text-dim: #8a9099;
+  --border: #e3e6ea;
+  --shadow: 0 1px 3px rgba(0, 0, 0, .08);
+
+  /* 四个象限的颜色，见 DS 1.1：I 红 / II 蓝 / III 黄 / IV 绿 */
+  --q1: #e74c3c;
+  --q2: #3498db;
+  --q3: #f1c40f;
+  --q4: #2ecc71;
+
+  --done-opacity: .45;
+}
+
+[data-theme="dark"] {
+  --bg: #16181d;
+  --surface: #1f2228;
+  --text: #e8eaed;
+  --text-dim: #8b93a1;
+  --border: #2e323a;
+  --shadow: 0 1px 3px rgba(0, 0, 0, .4);
+
+  --q1: #c0392b;
+  --q2: #2980b9;
+  --q3: #c9a227;
+  --q4: #27ae60;
+
+  --done-opacity: .5;
+}
+
+/* ---------------------------------------------------------------------------
+   基础
+   --------------------------------------------------------------------------- */
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  min-height: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+        "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  padding: 12px;
+  /* 移动端长按拖拽时别把系统的长按菜单弹出来（见 D-26） */
+  -webkit-touch-callout: none;
+}
+
+.btn {
+  font: inherit;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 10px;
+  cursor: pointer;
+  /* 移动端触摸目标不要太小（见 DS 3.3） */
+  min-height: 32px;
+}
+.btn:hover { border-color: var(--text-dim); }
+.btn:disabled { opacity: .4; cursor: not-allowed; }
+.btn--icon { min-width: 32px; padding: 5px 8px; }
+.btn--ghost { background: transparent; }
+
+/* ---------------------------------------------------------------------------
+   顶栏
+   --------------------------------------------------------------------------- */
+.topbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  margin-bottom: 12px;
+}
+
+.topbar__date { display: flex; align-items: center; gap: 6px; }
+.topbar__actions { display: flex; align-items: center; gap: 6px; margin-left: auto; }
+
+.date-picker {
+  font: inherit;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 8px;
+  min-height: 32px;
+}
+
+.topbar__stats { display: flex; gap: 12px; color: var(--text-dim); font-size: 14px; }
+.topbar__stats b { color: var(--text); }
+
+@media (max-width: 600px) {
+  .topbar__stats { order: 3; width: 100%; justify-content: space-between; }
+}
+
+/* ---------------------------------------------------------------------------
+   提示条（保护模式等）
+   --------------------------------------------------------------------------- */
+.banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  border-radius: 8px;
+  border: 1px solid var(--q1);
+  background: color-mix(in srgb, var(--q1) 12%, var(--surface));
+}
+.banner[hidden] { display: none; }
+.banner__text { flex: 1 1 240px; }
+.banner__actions { display: flex; gap: 8px; }
+
+/* ---------------------------------------------------------------------------
+   四象限：电脑 2×2
+   --------------------------------------------------------------------------- */
+.quadrants {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
+  gap: 12px;
+  min-height: calc(100vh - 120px);
+}
+
+.quadrant {
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-top: 3px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+/* 每个象限一条彩色顶边，对应 I 红 / II 蓝 / III 黄 / IV 绿 */
+.quadrant--I   { border-top-color: var(--q1); }
+.quadrant--II  { border-top-color: var(--q2); }
+.quadrant--III { border-top-color: var(--q3); }
+.quadrant--IV  { border-top-color: var(--q4); }
+
+.quadrant__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px 6px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 14px;
+}
+.quadrant__name { display: flex; align-items: center; gap: 6px; }
+.quadrant__tools { display: flex; align-items: center; gap: 8px; }
+.quadrant__dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  display: inline-block;
+}
+.quadrant--I   .quadrant__dot { background: var(--q1); }
+.quadrant--II  .quadrant__dot { background: var(--q2); }
+.quadrant--III .quadrant__dot { background: var(--q3); }
+.quadrant--IV  .quadrant__dot { background: var(--q4); }
+.quadrant__id { font-style: normal; color: var(--text-dim); font-weight: 600; }
+.quadrant__count { color: var(--text-dim); font-size: 13px; }
+
+.quadrant__body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 6px 0;
+  min-height: 60px;
+}
+
+.quadrant__empty {
+  margin: 0;
+  padding: 14px 12px;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+/* 象限右上角的「＋」。
+   视觉上是个小按钮，但**点击区域不能跟着变小** —— 移动端手指点不准
+   是最容易被忽略、又最让人恼火的问题（见 DS 3.3）。所以固定 32×32。 */
+.quadrant__add {
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  font: inherit;
+  font-size: 18px;
+  line-height: 1;
+  color: var(--text-dim);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.quadrant__add:hover { color: var(--text); border-color: var(--text-dim); }
+.quadrant__add:disabled { opacity: .35; cursor: not-allowed; }
+
+/* 象限右上角的「▣」→ 添加任务块。和「＋」同款同尺寸，
+   并排放在它右边（见 DS 2.10 UI） */
+.quadrant__add-block {
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  font: inherit;
+  font-size: 16px;
+  line-height: 1;
+  color: var(--text-dim);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.quadrant__add-block:hover { color: var(--text); border-color: var(--text-dim); }
+.quadrant__add-block:disabled { opacity: .35; cursor: not-allowed; }
+
+/* ---------------------------------------------------------------------------
+   任务
+   --------------------------------------------------------------------------- */
+.tasks { list-style: none; margin: 0; padding: 0; }
+
+/* li.task 现在是个**容器**：上面一行是任务本身，展开时下面挂阶段列表。
+   所以行内的排列交给 .task__row，li 自己不管布局。 */
+.task {
+  cursor: grab;
+  /* 触摸拖拽和页面滚动会打架 —— 这条是为拖拽让路的临时取舍，
+     必须真机确认，见 DS 5.3 */
+  touch-action: none;
+}
+
+.task__row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 12px;
+  /* 长文本换行完整显示，不溢出、不截断（见 DS 3.3） */
+  word-break: break-word;
+}
+.task__row:hover { background: var(--bg); }
+
+/* 有阶段时显示「3/5」。没阶段的任务不显示 —— 显示「0/1」是废话 */
+.task__progress {
+  flex: 0 0 auto;
+  font-size: 12px;
+  color: var(--text-dim);
+  /* 等宽数字，免得 3/5 和 3/10 的斜杠对不齐、跳动 */
+  font-variant-numeric: tabular-nums;
+  padding-top: 3px;
+}
+.task__progress--done { color: var(--q4); }
+
+/* 展开 / 收起阶段的小三角 */
+.task__toggle {
+  flex: 0 0 auto;
+  padding: 0;
+  min-width: 28px;
+  min-height: 28px;
+  font: inherit;
+  line-height: 1;
+  color: var(--text-dim);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+.task__toggle:hover { color: var(--text); }
+
+/* 任务右上角「添加阶段」的小按钮。
+   视觉上很轻，但点击区域还是留足 28px —— 移动端手指点不准
+   是最容易被忽略、又最让人恼火的问题（见 DS 3.3）。 */
+.task__add-stage {
+  flex: 0 0 auto;
+  min-width: 28px;
+  min-height: 28px;
+  padding: 0;
+  font: inherit;
+  font-size: 16px;
+  line-height: 1;
+  color: var(--text-dim);
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.task__add-stage:hover { color: var(--text); background: var(--bg); }
+.task__add-stage:disabled { opacity: .35; cursor: not-allowed; }
+
+/* ---------------------------------------------------------------------------
+   阶段（任务下面那一层步骤，见 DS 2.9）
+   --------------------------------------------------------------------------- */
+.stages {
+  list-style: none;
+  margin: 0 0 4px;
+  /* 往右缩进，让人一眼看出它是上面那条任务的下级 */
+  padding: 0 0 0 34px;
+}
+
+.stage {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 3px 12px 3px 0;
+  font-size: 14px;
+}
+
+.stage__text {
+  flex: 1;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.stage--done .stage__text {
+  text-decoration: line-through;
+  opacity: var(--done-opacity);
+}
+
+/* 删除阶段。触摸端永远显示（见下），鼠标端悬停才出来 */
+.stage__del {
+  flex: 0 0 auto;
+  font: inherit;
+  line-height: 1;
+  color: var(--text-dim);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  /* 触摸目标别做小（见 DS 3.3）—— 阶段行控件不多，取 30 也够 */
+  min-width: 30px;
+  min-height: 30px;
+  padding: 0;
+  opacity: 0;
+}
+.stage:hover .stage__del { opacity: 1; }
+.stage__del:hover { color: var(--text); }
+
+/* 移动端没有 hover：删除按钮必须一直可见，否则根本点不到 */
+@media (hover: none) {
+  .stage__del { opacity: .7; }
+}
+
+/* 「推迟」按钮：阶段行上的文字按钮（阶段推迟成池内任务，见 DS 2.11 二期），
+   和 stage__del 同款交互 —— hover 才出现，触摸端常显 */
+.stage__postpone {
+  flex: 0 0 auto;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--text-dim);
+  background: transparent;
+  border: 0;
+  padding: 4px 6px;
+  cursor: pointer;
+  opacity: 0;
+}
+.stage:hover .stage__postpone { opacity: 1; }
+.stage__postpone:hover { color: var(--text); }
+@media (hover: none) {
+  .stage__postpone { opacity: .6; }
+}
+
+/* 时段下拉（DS 2.12）：原生 select，做成和其它行内控件一个分量的小控件。
+   未设定时（--empty）颜色更淡——它只是占位，不是一条信息 */
+.slot__select {
+  flex: 0 0 auto;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 3px 2px;
+  cursor: pointer;
+  /* 触摸目标别做小（见 DS 3.3） */
+  min-height: 30px;
+}
+.slot__select:hover,
+.slot__select:focus { border-color: var(--q2); }
+.slot__select--empty { color: var(--text-dim); opacity: .7; }
+.slot__select--empty:hover,
+.slot__select--empty:focus { opacity: 1; }
+/* 拖拽克隆上不显示下拉（同 .drag-ghost 里按钮的处理） */
+.drag-ghost .slot__select { visibility: hidden; }
+
+/* 正在被拖的那条：留在原位但变淡，让人看出「是从这儿拿起来的」 */
+.task--dragging { opacity: .35; }
+
+/* 跟手的克隆。pointer-events: none 是必须的 ——
+   否则 elementFromPoint 每次都只命中它自己，永远算不出底下是哪个象限 */
+.drag-ghost {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 200;
+  pointer-events: none;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, .18);
+  opacity: .95;
+}
+/* 克隆出来的那条也会带上 .task__del / .block__del，悬停时冒出一个 ×，很怪 */
+.drag-ghost .task__del,
+.drag-ghost .block__del { display: none; }
+
+/* 落点占位：拖到哪儿，哪儿就腾出这么一块地方 */
+.task--placeholder {
+  margin: 2px 8px;
+  border: 1px dashed var(--q2);
+  border-radius: 6px;
+  background: transparent;
+  cursor: default;
+}
+
+body.is-dragging {
+  cursor: grabbing;
+  user-select: none;
+  -webkit-user-select: none;
+}
+body.is-dragging .task,
+body.is-dragging .block { cursor: grabbing; }
+
+.task__check { margin-top: 3px; flex: 0 0 auto; }
+
+.task__text {
+  flex: 1;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* 完成态：删除线 + 降低透明度（见 FS P0） */
+.task--done .task__text {
+  text-decoration: line-through;
+  opacity: var(--done-opacity);
+}
+
+.task__del {
+  flex: 0 0 auto;
+  font: inherit;
+  line-height: 1;
+  color: var(--text-dim);
+  background: transparent;
+  border: 0;
+  padding: 2px 6px;
+  cursor: pointer;
+  opacity: 0;
+}
+.task:hover .task__del { opacity: 1; }
+/* 移动端没有 hover，删除按钮必须一直可见 */
+@media (hover: none) {
+  .task__del { opacity: .6; }
+}
+
+/* ---------------------------------------------------------------------------
+   任务块（见 DS 2.10）
+   块是「顶层列表里的一个分组条目」：块头一行，底下挂着块内任务。
+   视觉上比普通任务重一点（左侧竖线 + 浅底），让人一眼看出它是一组。
+   --------------------------------------------------------------------------- */
+.block {
+  margin: 4px 8px;
+  background: color-mix(in srgb, var(--q2) 4%, var(--surface));
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--q2);
+  border-radius: 6px;
+  cursor: grab;
+  touch-action: none;
+}
+
+.block__head {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 5px 8px 5px 9px;
+  word-break: break-word;
+}
+
+.block__check { margin-top: 3px; flex: 0 0 auto; }
+
+/* 块名比任务文字重一点：600 字重 + 稍微收紧行高 */
+.block__name {
+  flex: 1;
+  font-weight: 600;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  cursor: text;
+}
+
+.block--done .block__name {
+  text-decoration: line-through;
+  opacity: var(--done-opacity);
+}
+
+/* 展开 / 收起块内任务的小三角，和任务的 task__toggle 同款 */
+.block__toggle {
+  flex: 0 0 auto;
+  padding: 0;
+  min-width: 28px;
+  min-height: 28px;
+  font: inherit;
+  line-height: 1;
+  color: var(--text-dim);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+.block__toggle:hover { color: var(--text); }
+
+/* 删除块。和 task__del 一个路数：hover 才出现，触摸端常显 */
+.block__del {
+  flex: 0 0 auto;
+  font: inherit;
+  line-height: 1;
+  color: var(--text-dim);
+  background: transparent;
+  border: 0;
+  padding: 2px 6px;
+  cursor: pointer;
+  opacity: 0;
+}
+.block:hover .block__del { opacity: 1; }
+.block__del:hover { color: var(--text); }
+@media (hover: none) {
+  .block__del { opacity: .6; }
+}
+
+/* 块内任务列表：往右缩进一层，和块的归属关系一眼可见 */
+.block__tasks {
+  list-style: none;
+  margin: 0 0 4px;
+  padding: 0 0 0 30px;
+}
+
+/* 空块那句「把任务拖进来」：告诉用户这里能放东西，
+   也给拖拽一个看得见的目标（它本身也是 li，拖拽时会被排除） */
+.block__empty {
+  margin: 0;
+  padding: 4px 12px 6px 0;
+  color: var(--text-dim);
+  font-size: 13px;
+  font-style: italic;
+}
+
+/* 块内任务的行距收紧一点：块强调的是「一组」，组内不必和顶层一样松 */
+.block__tasks .task__row { padding-top: 3px; padding-bottom: 3px; }
+
+/* 正在被拖的块、块的落点占位，和任务的同款机制 */
+.block--dragging { opacity: .35; }
+.block--placeholder {
+  border: 1px dashed var(--q2);
+  border-left: 3px dashed var(--q2);
+  background: transparent;
+  cursor: default;
+}
+
+/* ---------------------------------------------------------------------------
+   计划池（见 DS 2.11）
+   四象限下方的一块独立面板：推迟进来的任务在这里等安排。
+   空池只有一句占位，不占版面关注。
+   --------------------------------------------------------------------------- */
+.pool {
+  margin-top: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--q3);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.pool__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 14px;
+  color: var(--text-dim);
+}
+.pool__name { font-weight: 600; color: var(--text); }
+
+/* 头部「＋」：手动添加入口（三期），和象限标题栏的 quadrant__add 同款 */
+.pool__add {
+  margin-left: auto;
+  font: inherit;
+  line-height: 1;
+  color: var(--text-dim);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  /* 触摸目标别做小（见 DS 3.3） */
+  min-width: 32px;
+  min-height: 32px;
+  padding: 0;
+}
+.pool__add:hover { color: var(--text); }
+
+.pool__empty {
+  margin: 0;
+  padding: 10px 12px;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+.pool__list { list-style: none; margin: 0; padding: 2px 0; }
+
+/* 池内的行比象限里的任务更轻：它不在任何一天里，只是等着被安排 */
+.pool__item {
+  cursor: grab;
+  touch-action: none;
+}
+.pool__item--dragging { opacity: .35; }
+
+.pool__text {
+  flex: 1;
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  cursor: text;
+}
+
+/* 池内删除。和 task__del 一个路数：hover 才出现，触摸端常显 */
+.pool__del {
+  flex: 0 0 auto;
+  font: inherit;
+  line-height: 1;
+  color: var(--text-dim);
+  background: transparent;
+  border: 0;
+  padding: 2px 6px;
+  cursor: pointer;
+  opacity: 0;
+}
+.pool__item:hover .pool__del { opacity: 1; }
+.pool__del:hover { color: var(--text); }
+@media (hover: none) {
+  .pool__del { opacity: .6; }
+}
+
+/* 完成时间（DS 2.11 二期）：池行上的文字按钮。它是**信息**而不只是动作，
+   所以不像删除那样藏进 hover —— 始终可见；没设定时显示「未设定」且更淡 */
+.pool__date {
+  flex: 0 0 auto;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--text-dim);
+  background: transparent;
+  border: 0;
+  padding: 4px 6px;
+  cursor: pointer;
+  opacity: .8;
+}
+.pool__date:hover { color: var(--text); opacity: 1; }
+.pool__date--empty { opacity: .45; font-style: italic; }
+.pool__date--empty:hover { opacity: .8; }
+
+/* 日期编辑态：原地换成一个日期输入框 + 清除按钮（都在编辑行里，常显） */
+.pool__date-input {
+  flex: 0 1 auto;
+  font: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--q2);
+  border-radius: 6px;
+  padding: 3px 6px;
+  /* 和别的输入框一样：不能为了紧凑把可点区域做小（见 DS 3.3） */
+  min-height: 32px;
+}
+.pool__date-clear {
+  flex: 0 0 auto;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--text-dim);
+  background: transparent;
+  border: 0;
+  padding: 4px 6px;
+  cursor: pointer;
+}
+.pool__date-clear:hover { color: var(--text); }
+
+/* ---------------------------------------------------------------------------
+   模板面板（DS 2.14）：视觉上是计划池的姊妹面板 ——
+   同样的卡片、同样的头部、同样的行，只是左边条换个颜色、行内按钮不同
+   --------------------------------------------------------------------------- */
+.templates {
+  margin-top: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--q2);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.tpl__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 14px;
+  color: var(--text-dim);
+}
+.tpl__title { font-weight: 600; color: var(--text); }
+
+/* 「存今天为模板」：头部的主按钮，像顶栏的 ghost 按钮 */
+.tpl__save {
+  margin-left: auto;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--text-dim);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  cursor: pointer;
+  /* 触摸目标别做小（见 DS 3.3） */
+  min-height: 32px;
+}
+.tpl__save:hover { color: var(--text); border-color: var(--text-dim); }
+
+.tpl__empty {
+  margin: 0;
+  padding: 10px 12px;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+.tpl__list { list-style: none; margin: 0; padding: 2px 0; }
+
+.tpl__name {
+  flex: 1;
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* 行内按钮（应用 / 改名）：始终可见的文字按钮，删除还是 hover 才显形 */
+.tpl__apply,
+.tpl__rename {
+  flex: 0 0 auto;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--text-dim);
+  background: transparent;
+  border: 0;
+  padding: 4px 6px;
+  cursor: pointer;
+  opacity: .8;
+}
+.tpl__apply:hover,
+.tpl__rename:hover { color: var(--text); opacity: 1; }
+
+.tpl__del {
+  flex: 0 0 auto;
+  font: inherit;
+  line-height: 1;
+  color: var(--text-dim);
+  background: transparent;
+  border: 0;
+  padding: 2px 6px;
+  cursor: pointer;
+  opacity: 0;
+}
+.tpl__item:hover .tpl__del { opacity: 1; }
+.tpl__del:hover { color: var(--text); }
+@media (hover: none) {
+  .tpl__del { opacity: .6; }
+}
+
+/* 「推迟」按钮：任务行上的文字按钮，和删除按钮同款交互 */
+.task__postpone {
+  flex: 0 0 auto;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--text-dim);
+  background: transparent;
+  border: 0;
+  padding: 4px 6px;
+  cursor: pointer;
+  opacity: 0;
+}
+.task:hover .task__postpone { opacity: 1; }
+.task__postpone:hover { color: var(--text); }
+@media (hover: none) {
+  .task__postpone { opacity: .6; }
+}
+
+/* 拖拽克隆上不该冒出「推迟」按钮（同 .drag-ghost .task__del 那条的理由） */
+.drag-ghost .task__postpone,
+.drag-ghost .stage__postpone { opacity: 0; }
+
+/* ---------------------------------------------------------------------------
+   时间视图（见 DS 2.13）：按时段分组的当天任务
+   网页版两列网格（4 组即 2×2），≤600px 单列 —— 和四象限同一个断点
+   --------------------------------------------------------------------------- */
+.timeview { margin-top: 12px; }
+
+.timeview__grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+@media (max-width: 600px) {
+  .timeview__grid { grid-template-columns: 1fr; }
+}
+
+.timeview__group {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--q2);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.timeview__title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+.timeview__count {
+  margin-left: auto;
+  font-size: 12px;
+  font-weight: normal;
+  color: var(--text-dim);
+}
+
+.timeview__list { list-style: none; margin: 0; padding: 4px 12px; }
+
+.timeview__item {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 6px 0;
+  font-size: 14px;
+  color: var(--text);
+}
+.timeview__text { min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* 阶段条目的所属任务标注：时间视图里看不到任务树，得说清它是谁的 */
+.timeview__parent {
+  flex: 0 1 auto;
+  font-size: 12px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 完成的条目和象限里同一个视觉语言：删除线 + 降透明度 */
+.timeview__item--done .timeview__text,
+.timeview__item--done .timeview__parent {
+  text-decoration: line-through;
+  opacity: var(--done-opacity);
+}
+
+/* 空态：一条设了时段的任务都没有时给一句指引，不留空白页 */
+.timeview__empty {
+  margin: 0;
+  padding: 24px 12px;
+  text-align: center;
+  font-size: 14px;
+  color: var(--text-dim);
+  background: var(--surface);
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+}
+
+/* ---------------------------------------------------------------------------
+   正在编辑的那一行（新增或改文字）
+   --------------------------------------------------------------------------- */
+.task--editing .task__row,
+.block--editing .task__row,
+.stage--editing { padding: 4px 8px; }
+
+.task__input,
+.stage__input {
+  flex: 1;
+  width: 100%;
+  min-width: 0;
+  font: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--q2);
+  border-radius: 6px;
+  padding: 5px 8px;
+  /* 和按钮一样：不能为了紧凑把可点区域做小（见 DS 3.3） */
+  min-height: 32px;
+}
+
+/* 新增用的输入框画成虚线，和「改已有的」区分开。
+   块的输入框复用 task__input（见 render.js），虚线规则跟着一起覆盖 */
+.task--new .task__input,
+.block--new .task__input,
+.stage--new .stage__input { border-style: dashed; }
+
+/* ---------------------------------------------------------------------------
+   保护模式：整个界面锁死（见 DS 2.4）
+   --------------------------------------------------------------------------- */
+/* 保护模式下按钮留着但点不动 —— 直接藏掉会让标题栏高度跳一下，反而像出了故障 */
+body.is-readonly .quadrant__add,
+body.is-readonly .quadrant__add-block { opacity: .3; }
+body.is-readonly .task__check,
+body.is-readonly .task__del,
+body.is-readonly .task__postpone,
+body.is-readonly .stage__postpone,
+body.is-readonly .block__check,
+body.is-readonly .block__del,
+body.is-readonly .pool__del,
+body.is-readonly .pool__add,
+body.is-readonly .pool__date,
+body.is-readonly .pool__date-clear,
+body.is-readonly .tpl__save,
+body.is-readonly .tpl__apply,
+body.is-readonly .tpl__rename,
+body.is-readonly .tpl__del,
+body.is-readonly .slot__select { pointer-events: none; opacity: .3; }
+/* 点文字进编辑也得挡住：保护模式下允许编辑就等于允许覆盖原始数据 */
+body.is-readonly .task__text,
+body.is-readonly .block__name,
+body.is-readonly .pool__text { pointer-events: none; }
+
+/* ---------------------------------------------------------------------------
+   下拉菜单（导出格式）
+   --------------------------------------------------------------------------- */
+.menu-anchor { position: relative; display: inline-block; }
+
+.menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  min-width: 220px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, .16);
+  padding: 4px;
+  z-index: 50;
+}
+.menu[hidden] { display: none; }
+
+.menu__item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  color: var(--text);
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  padding: 7px 10px;
+  cursor: pointer;
+}
+.menu__item:hover { background: var(--bg); }
+.menu__item small {
+  display: block;
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+/* ---------------------------------------------------------------------------
+   确认框
+   --------------------------------------------------------------------------- */
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(0, 0, 0, .45);
+}
+.modal[hidden] { display: none; }
+
+.modal__box {
+  width: min(92vw, 420px);
+  background: var(--surface);
+  border-radius: 10px;
+  padding: 18px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, .3);
+}
+.modal__box--wide { width: min(94vw, 640px); }
+.modal__area {
+  width: 100%;
+  font: 13px/1.5 ui-monospace, Consolas, "Courier New", monospace;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px;
+  margin-bottom: 14px;
+  resize: vertical;
+}
+.modal__title { margin: 0 0 8px; font-size: 16px; }
+/* pre-line：让提示文案里的换行符真的换行，否则会挤成一坨 */
+.modal__text { margin: 0 0 16px; color: var(--text-dim); font-size: 14px; white-space: pre-line; }
+.modal__actions { display: flex; justify-content: flex-end; gap: 8px; }
+
+.btn--primary { background: var(--q2); border-color: var(--q2); color: #fff; }
+.btn--danger { background: var(--q1); border-color: var(--q1); color: #fff; }
+
+/* ---------------------------------------------------------------------------
+   提示（toast）
+   --------------------------------------------------------------------------- */
+.toast-host {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 100;
+  pointer-events: none;
+  width: min(92vw, 480px);
+}
+
+.toast {
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: var(--text);
+  color: var(--bg);
+  box-shadow: var(--shadow);
+  font-size: 14px;
+}
+.toast--error { background: var(--q1); color: #fff; }
+.toast--warn { background: var(--q3); color: #3a2f00; }
+
+/* ---------------------------------------------------------------------------
+   打印（见 DS 4.4）
+   --------------------------------------------------------------------------- */
+
+/* 打印内容平时完全不显示，只在打印那一刻露出来 */
+.print-doc { display: none; }
+
+@media print {
+  /* 屏幕上的一切都不要：按钮、工具栏、提示条、确认框……一个都不该出现在纸上 */
+  body > *:not(.print-doc) { display: none !important; }
+
+  .print-doc {
+    display: block;
+    color: #000;
+    background: #fff;
+  }
+
+  body {
+    background: #fff;
+    padding: 0;
+    font-size: 12pt;
+  }
+
+  .print__title { font-size: 18pt; margin: 0 0 12pt; }
+
+  .print__day { margin-top: 14pt; }
+  .print__date { font-size: 14pt; margin: 0 0 8pt; border-bottom: 1pt solid #000; }
+
+  /* 象限去掉彩色底、改用边框：省墨水，黑白打印也能分得清 */
+  .print__quad {
+    border: 1pt solid #999;
+    border-radius: 3pt;
+    padding: 6pt 8pt;
+    margin-bottom: 8pt;
+    /* 一个象限尽量别被切成两页 */
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  .print__quad-name { font-size: 11pt; margin: 0 0 4pt; }
+
+  .print__list { margin: 0; padding-left: 16pt; }
+  .print__task {
+    margin: 2pt 0;
+    /* 一条任务尽量别跨页断开 */
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  .print__task--done { color: #666; text-decoration: line-through; }
+  .print__box { margin-right: 4pt; }
+
+  /* 阶段缩进一层印在任务下面 */
+  .print__stages { margin: 2pt 0 0; padding-left: 16pt; }
+  .print__stage { margin: 1pt 0; break-inside: avoid; page-break-inside: avoid; }
+  .print__stage--done { color: #666; text-decoration: line-through; }
+
+  .print__quad-empty,
+  .print__empty { color: #666; font-style: italic; margin: 0; }
+}
+
+/* ---------------------------------------------------------------------------
+   移动端：1 列 4 行（见 DS 1.1 / FS P0）
+   --------------------------------------------------------------------------- */
+@media (max-width: 600px) {
+  body { padding: 8px; }
+
+  .quadrants {
+    grid-template-columns: 1fr;
+    grid-template-rows: none;
+    min-height: 0;
+  }
+
+  .quadrant__body { max-height: 40vh; }
+}

@@ -1,0 +1,10 @@
+{
+  "appId": "com.candiwind.timescheduler",
+  "appName": "四象限任务",
+
+  "webDir": "www",
+
+  "server": {
+    "androidScheme": "https"
+  }
+}
