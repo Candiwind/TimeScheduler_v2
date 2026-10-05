@@ -516,8 +516,14 @@ var Render = (function (CONFIG, Util) {
    * groups 是 task-ops.getTimeView 算好的 [{ slot, items }]。这里只管画：
    * 每组一张卡片（图标 + 名称 + 条数 + 条目列表），包在一个网格容器里——
    * 两列还是单列是 CSS 的事（网页两列、≤600px 单列，见 D-40）。
+   *
+   * v1.2 起条目可操作（勾选 / 改文字 / 删除 / 改时段，D-40 修订）：
+   * 类名和数据属性与象限视图一致，编辑框复用 task__input / stage__input，
+   * app.js 的 commitEdit / 键盘 / 失焦逻辑零改动共用。
    */
-  function buildTimeViewHtml(groups) {
+  function buildTimeViewHtml(groups, view) {
+    view = view || {};
+    var editing = view.editing || null;
     var list = Array.isArray(groups) ? groups : [];
 
     if (!list.length) {
@@ -537,20 +543,83 @@ var Render = (function (CONFIG, Util) {
         '<ul class="timeview__list">';
 
       for (var k = 0; k < group.items.length; k++) {
-        var item = group.items[k];
-        html += '<li class="timeview__item' +
-          (item.completed ? ' timeview__item--done' : '') + '">' +
-          '<span class="timeview__text">' + Util.escapeHtml(item.text) + '</span>' +
-          // 阶段条目标注所属任务（时间视图里看不到任务树，得说清它是谁的）
-          (item.parentText
-            ? '<span class="timeview__parent">· ' + Util.escapeHtml(item.parentText) + '</span>'
-            : '') +
-          '</li>';
+        html += buildTimeViewItemHtml(group.items[k], group.slot, editing);
       }
 
       html += '</ul></section>';
     }
     return html + '</div>';
+  }
+
+  /**
+   * 时间视图里的一条条目（任务或阶段）。
+   *
+   * 类名和象限视图保持一致（task / task__row / task__check / task__text /
+   * task__del，阶段是 stage / stage__check / stage__text / stage__del）——
+   * 完成态划线、保护模式锁死、删除钮悬停出现那套 CSS 直接生效，不用抄一遍。
+   * 数据属性带齐 data-quadrant / data-id / data-task-id / data-stage-id：
+   * 象限从 DOM 嵌套反查 id，时间视图没有那层嵌套，id 直接写在条目身上，
+   * 查出来以后走的是同一批 task-ops 函数、同一份数据。
+   *
+   * 时段下拉显示的「当前值」就是所在组的时段（条目正是按它进组的）。
+   */
+  function buildTimeViewItemHtml(item, slot, editing) {
+    var qid = Util.escapeHtml(item.quadrantId);
+
+    // ---- 任务条目 ----
+    if (item.kind === 'task') {
+      var taskAttrs = ' data-kind="task"' +
+        ' data-id="' + Util.escapeHtml(item.taskId) + '"' +
+        ' data-quadrant="' + qid + '"';
+
+      if (editing && editing.mode === 'edit-task' && editing.taskId === item.taskId) {
+        return '<li class="timeview__item task task--editing"' + taskAttrs + '>' +
+          '<div class="task__row">' +
+            '<input type="text" class="task__input" value="' + Util.escapeHtml(item.text) + '"' +
+              ' maxlength="500" aria-label="编辑任务">' +
+          '</div>' +
+        '</li>';
+      }
+
+      return '<li class="timeview__item task' +
+          (item.completed ? ' task--done timeview__item--done' : '') + '"' + taskAttrs + '>' +
+        '<div class="task__row">' +
+          '<input type="checkbox" class="task__check"' +
+            (item.completed ? ' checked' : '') + ' aria-label="标记完成">' +
+          '<span class="task__text timeview__text">' + Util.escapeHtml(item.text) + '</span>' +
+          buildSlotSelectHtml(slot) +
+          '<button type="button" class="task__del" aria-label="删除任务">×</button>' +
+        '</div>' +
+      '</li>';
+    }
+
+    // ---- 阶段条目（带所属任务标注：时间视图里看不到任务树，得说清它是谁的）----
+    var stageAttrs = ' data-kind="stage"' +
+      ' data-id="' + Util.escapeHtml(item.stageId) + '"' +
+      ' data-task-id="' + Util.escapeHtml(item.taskId) + '"' +
+      ' data-stage-id="' + Util.escapeHtml(item.stageId) + '"' +
+      ' data-quadrant="' + qid + '"';
+
+    if (editing && editing.mode === 'edit-stage' &&
+        editing.taskId === item.taskId && editing.stageId === item.stageId) {
+      return '<li class="timeview__item stage stage--editing"' + stageAttrs + '>' +
+        '<input type="text" class="stage__input" value="' + Util.escapeHtml(item.text) + '"' +
+          ' maxlength="500" aria-label="编辑阶段">' +
+      '</li>';
+    }
+
+    return '<li class="timeview__item stage' +
+        (item.completed ? ' stage--done timeview__item--done' : '') + '"' + stageAttrs + '>' +
+      '<input type="checkbox" class="stage__check"' +
+        (item.completed ? ' checked' : '') + ' aria-label="标记阶段完成">' +
+      '<span class="stage__text timeview__text">' + Util.escapeHtml(item.text) +
+        (item.parentText
+          ? ' <span class="timeview__parent">· ' + Util.escapeHtml(item.parentText) + '</span>'
+          : '') +
+      '</span>' +
+      buildSlotSelectHtml(slot) +
+      '<button type="button" class="stage__del" aria-label="删除阶段">×</button>' +
+    '</li>';
   }
 
   /** 完成率显示文本：一条任务都没有时不能除以零（见 DS 3.2） */
@@ -651,10 +720,10 @@ var Render = (function (CONFIG, Util) {
     el.pool.innerHTML = buildPoolHtml(pool, view);
   }
 
-  /** 画出时间视图（groups 是 task-ops.getTimeView 算好的分组） */
-  function renderTimeView(groups) {
+  /** 画出时间视图（groups 是 task-ops.getTimeView 算好的分组，view 带编辑状态） */
+  function renderTimeView(groups, view) {
     if (!el.timeview) return;
-    el.timeview.innerHTML = buildTimeViewHtml(groups);
+    el.timeview.innerHTML = buildTimeViewHtml(groups, view);
   }
 
   /** 画出模板面板（view.templates 是数据里的 templates 数组） */
@@ -665,12 +734,13 @@ var Render = (function (CONFIG, Util) {
 
   /**
    * 切换主区域显示哪个视图（DS 2.13）：'quadrants' 显示四象限 + 计划池 + 模板，
-   * 'time' 显示时间视图。只是 hidden 开关，两边内容都在 DOM 里
+   * 'time' 显示时间视图 + 计划池（计划池两个视图都留着，它跟日期无关，见 DS 2.11；
+   * 模板面板只在四象限视图出现）。只是 hidden 开关，内容都在 DOM 里
    */
   function setViewMode(mode) {
     var isTime = (mode === 'time');
     if (el.quadrants) el.quadrants.hidden = isTime;
-    if (el.pool) el.pool.hidden = isTime;
+    if (el.pool) el.pool.hidden = false;
     if (el.templates) el.templates.hidden = isTime;
     if (el.timeview) el.timeview.hidden = !isTime;
   }
@@ -679,18 +749,25 @@ var Render = (function (CONFIG, Util) {
    * 编辑框出现之后把光标放进去。
    * 整块重画会丢掉焦点，所以每次重画完都要手动补一次。
    *
-   * 任务和阶段用的是两个不同的输入框类名，所以两种都要找；
-   * 计划池的编辑框复用 task__input，但长在 #pool 里，也要找一遍。
+   * 谁先看得见就先找谁：时间视图开着时编辑框可能长在它里面（v1.2 起
+   * 时间视图可编辑），别让焦点落进藏着的那一半。
+   * 计划池的编辑框复用 task__input，外加它独有的 pool__date-input。
    */
   function focusEditor(selectAll) {
-    if (!el.quadrants) return;
-    var input = el.quadrants.querySelector('.task__input') ||
-                el.quadrants.querySelector('.stage__input') ||
-                (el.pool
-                  ? (el.pool.querySelector('.task__input') ||
-                     el.pool.querySelector('.pool__date-input'))
-                  : null) ||
-                (el.templates ? el.templates.querySelector('.task__input') : null);
+    var hosts = [];
+    if (el.timeview && !el.timeview.hidden) hosts.push(el.timeview);
+    if (el.quadrants && !el.quadrants.hidden) hosts.push(el.quadrants);
+    if (el.pool) hosts.push(el.pool);
+    if (el.templates) hosts.push(el.templates);
+
+    var input = null;
+    for (var i = 0; i < hosts.length && !input; i++) {
+      input = hosts[i].querySelector('.task__input') ||
+              hosts[i].querySelector('.stage__input') ||
+              (hosts[i] === el.pool
+                ? hosts[i].querySelector('.pool__date-input')
+                : null);
+    }
     if (!input) return;
     input.focus();
     if (selectAll) input.select();

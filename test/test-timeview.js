@@ -213,5 +213,82 @@ t('文本要转义', function () {
 });
 
 // ---------------------------------------------------------------------------
+h.group('可操作：条目带象限同款的类名与数据属性（v1.2，D-40 修订）');
+
+t('任务条目：勾选框 / 文字 / 时段下拉 / 删除钮 / 数据属性齐全', function () {
+  var html = Render.buildTimeViewHtml(oneGroup());
+
+  h.assertTrue(html.indexOf('data-kind="task"') !== -1);
+  h.assertTrue(html.indexOf('data-id="t1"') !== -1, '任务 id 写在条目上');
+  h.assertTrue(html.indexOf('data-quadrant="I"') !== -1, '象限 id 写在条目上');
+  h.assertTrue(html.indexOf('task__check') !== -1, '勾选框和象限同一个类名');
+  h.assertTrue(html.indexOf('task__text') !== -1, '文字可点进编辑');
+  h.assertTrue(html.indexOf('slot__select') !== -1, '时段下拉和象限同一个类名');
+  h.assertTrue(html.indexOf('task__del') !== -1, '删除钮和象限同一个类名');
+});
+
+t('阶段条目：task 与 stage 两个 id 都带齐', function () {
+  var html = Render.buildTimeViewHtml(oneGroup());
+
+  h.assertTrue(html.indexOf('data-kind="stage"') !== -1);
+  h.assertTrue(html.indexOf('data-task-id="t2"') !== -1, '所属任务 id');
+  h.assertTrue(html.indexOf('data-stage-id="s1"') !== -1, '阶段 id');
+  h.assertTrue(html.indexOf('data-quadrant="II"') !== -1, '象限 id');
+  h.assertTrue(html.indexOf('stage__check') !== -1);
+  h.assertTrue(html.indexOf('stage__del') !== -1);
+});
+
+t('时段下拉的当前值就是所在组的时段', function () {
+  var html = Render.buildTimeViewHtml(oneGroup());
+
+  h.assertTrue(html.indexOf('<option value="上午" selected>') !== -1);
+});
+
+t('编辑中的任务换成输入框（复用 task__input）', function () {
+  var html = Render.buildTimeViewHtml(oneGroup(), {
+    editing: { mode: 'edit-task', quadrantId: 'I', taskId: 't1' }
+  });
+
+  h.assertTrue(html.indexOf('task__input') !== -1, '输入框在');
+  h.assertTrue(html.indexOf('value="看邮件"') !== -1, '带原文');
+});
+
+t('编辑中的阶段换成输入框（复用 stage__input），别的条目不受影响', function () {
+  var html = Render.buildTimeViewHtml(oneGroup(), {
+    editing: { mode: 'edit-stage', quadrantId: 'II', taskId: 't2', stageId: 's1' }
+  });
+
+  h.assertTrue(html.indexOf('stage__input') !== -1, '输入框在');
+  h.assertTrue(html.indexOf('value="收集数据"') !== -1, '带原文');
+  h.assertTrue(html.indexOf('task__check') !== -1, '同组任务条目照常画');
+});
+
+t('完成态：任务和阶段各带各的 done 类（象限同一套 CSS）', function () {
+  var html = Render.buildTimeViewHtml(oneGroup());
+
+  h.assertTrue(html.indexOf('stage--done') !== -1, '完成的阶段带 stage--done');
+  h.assertTrue(html.indexOf('timeview__item--done') !== -1, '旧的时间视图完成类也留着');
+});
+
+// ---------------------------------------------------------------------------
+h.group('显隐守卫：时间视图下其他板块必须真的藏起来');
+
+t('四个主板块的 [hidden] 都有 display:none 兜底', function () {
+  // render.setViewMode 靠 hidden 属性切视图，但 .quadrants 写了 display:grid，
+  // 作者样式会赢过浏览器默认的 [hidden]{display:none} —— 不补守卫的话，
+  // 时间视图下四象限、计划池、模板会和时间排布一起显示。node 里算不了
+  // 层叠，所以直接查样式表里有没有这条守卫（和 test-load-order 一个思路：
+  // 测那个「坏了也不报错」的东西）。
+  var fs = require('fs');
+  var path = require('path');
+  var css = fs.readFileSync(path.join(__dirname, '..', 'css', 'style.css'), 'utf8');
+
+  ['.quadrants', '.pool', '.templates', '.timeview'].forEach(function (sel) {
+    var re = new RegExp('\\' + sel + '\\[hidden\\][^{]*\\{[^}]*display\\s*:\\s*none');
+    h.assertTrue(re.test(css), sel + '[hidden] 缺 display:none 守卫');
+  });
+});
+
+// ---------------------------------------------------------------------------
 
 h.summary('时间视图（DS 2.13）');

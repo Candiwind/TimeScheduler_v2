@@ -131,6 +131,19 @@ body {
 .banner__actions { display: flex; gap: 8px; }
 
 /* ---------------------------------------------------------------------------
+   视图切换的 hidden 守卫（DS 2.13 / render.setViewMode）
+
+   主区域四个板块靠 hidden 属性切显隐，但 .quadrants 自己写了 display:grid，
+   作者样式会赢过浏览器默认的 [hidden]{display:none} —— 不补这条的话，
+   切到时间视图后四象限（以及下面的计划池、模板）会赖着不走，和时间排布
+   一起杵在页面上。四个板块一起管。
+   --------------------------------------------------------------------------- */
+.quadrants[hidden],
+.pool[hidden],
+.templates[hidden],
+.timeview[hidden] { display: none; }
+
+/* ---------------------------------------------------------------------------
    四象限：电脑 2×2
    --------------------------------------------------------------------------- */
 .quadrants {
@@ -240,7 +253,9 @@ body {
 
 /* li.task 现在是个**容器**：上面一行是任务本身，展开时下面挂阶段列表。
    所以行内的排列交给 .task__row，li 自己不管布局。 */
-.task {
+/* 拖拽手势只在四象限里有（时间视图的条目复用 .task 类名但不可拖，见 DS 2.13），
+   所以这两条样式限定在 #quadrants 里，别误伤时间视图 */
+#quadrants .task {
   cursor: grab;
   /* 触摸拖拽和页面滚动会打架 —— 这条是为拖拽让路的临时取舍，
      必须真机确认，见 DS 5.3 */
@@ -855,13 +870,20 @@ body.is-dragging .block { cursor: grabbing; }
 
 .timeview__list { list-style: none; margin: 0; padding: 4px 12px; }
 
+/* 条目复用象限的类名（v1.2 起可操作，见 DS 2.13）：
+   任务条目内部走 .task__row 的 flex（和象限同一个布局），li 自己不排；
+   阶段条目没有 row 壳，li 自己 flex —— 和它在象限里的 .stage 规则同款 */
 .timeview__item {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-  padding: 6px 0;
   font-size: 14px;
   color: var(--text);
+}
+.timeview__item.task { display: block; }
+.timeview__item.task .task__row { padding: 5px 0; }
+.timeview__item.stage {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 5px 0;
 }
 .timeview__text { min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 

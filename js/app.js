@@ -160,8 +160,19 @@ var App = (function (CONFIG, Util, Store, Toast, Theme, Render, TaskOps, Drag, D
   function renderCurrent() {
     var day = Store.getDayTasks(state.data, state.date);
     state.stats = TaskOps.getStats(state.data, state.date);
+
+    // 编辑状态往哪边传：带 quadrantId 的（任务 / 阶段 / 块）是象限类编辑。
+    // 时间视图开着时，这份编辑得由时间视图画 —— 四象限那边不能再画一份
+    // 输入框，不然 DOM 里同时存在两个 .task__input，commitEdit 的
+    // document.querySelector 会读到藏在四象限里、没动过的那一份，
+    // 用户在时间视图里改的字就丢了。
+    // 池 / 模板的编辑（没有 quadrantId）不受视图切换影响，照常传。
+    var quadrantEditing = (state.editing && state.editing.quadrantId)
+      ? state.editing : null;
+    var panelEditing = quadrantEditing ? null : state.editing;
+
     Render.render(day, state.stats, {
-      editing: state.editing,
+      editing: (state.view === 'time') ? panelEditing : state.editing,
       expanded: state.expanded,
       collapsedBlocks: state.collapsedBlocks,
       // 进度按「最细的可勾选单位」算，任务自己有阶段数阶段、块数块内 ——
@@ -175,7 +186,9 @@ var App = (function (CONFIG, Util, Store, Toast, Theme, Render, TaskOps, Drag, D
     // 时间视图是另一份内容（按时段分组，DS 2.13）：开着就重画它；
     // 显示哪一边由 setViewMode 的 hidden 开关决定，两边内容都在 DOM 里
     if (state.view === 'time') {
-      Render.renderTimeView(TaskOps.getTimeView(state.data, state.date));
+      Render.renderTimeView(TaskOps.getTimeView(state.data, state.date), {
+        editing: quadrantEditing
+      });
     }
     Render.setViewMode(state.view);
     Render.setReadOnly(Store.isProtectionMode());
@@ -893,9 +906,128 @@ var App = (function (CONFIG, Util, Store, Toast, Theme, Render, TaskOps, Drag, D
     });
   }
 
+  /**
+   * 时间视图自己的事件（DS 2.13，v1.2 起可操作）。
+   *
+   * 条目的类名 / 数据属性和象限视图一致，所以这里只是「换一棵树，查 id
+   * 的方式不同」：象限从 DOM 嵌套反查（section[data-quadrant] > li[data-id]），
+   * 时间视图没有那层嵌套，id 直接写在条目自己身上 —— 查出来以后，
+   * 走的还是同一批 start* / do* 函数、同一份数据。
+   */
+  function timeItemOf(node) {
+    var li = closest(node, 'timeview__item');
+    if (!li) return null;
+    var kind = li.getAttribute('data-kind');
+    return {
+      kind: kind,
+      quadrantId: li.getAttribute('data-quadrant'),
+      taskId: (kind === 'stage') ? li.getAttribute('data-task-id')
+                                 : li.getAttribute('data-id'),
+      stageId: (kind === 'stage') ? li.getAttribute('data-stage-id') : null
+    };
+  }
+
+  function bindTimeView() {
+    var root = document.getElementById('timeview');
+    if (!root) return;
+
+    // ---- 点击 ----
+    root.addEventListener('click', function (e) {
+      var target = e.target;
+
+      // 删除（任务走 doRemoveItem、阶段走 doRemoveStage，和象限同一批函数。
+      // 属性要在 commitEdit 之前取好 —— 提交会重画，节点会被换掉）
+      if (closest(target, 'task__del') || closest(target, 'stage__del')) {
+        var del = timeItemOf(target);
+        if (!del || !del.quadrantId || !del.taskId) return;
+        commitEdit();               // 先把正在编辑的内容落下来，别顺手丢了
+        if (del.kind === 'stage') doRemoveStage(del.quadrantId, del.taskId, del.stageId);
+        else doRemoveItem(del.quadrantId, del.taskId);
+        return;
+      }
+
+      // 点任务文字 → 改任务
+      if (closest(target, 'task__text')) {
+        var et = timeItemOf(target);
+        if (et && et.quadrantId && et.taskId) startEdit(et.quadrantId, et.taskId);
+        return;
+      }
+
+      // 点阶段文字 → 改阶段
+      if (closest(target, 'stage__text')) {
+        var es = timeItemOf(target);
+        if (es && es.quadrantId && es.taskId && es.stageId) {
+          startEditStage(es.quadrantId, es.taskId, es.stageId);
+        }
+        return;
+      }
+    });
+
+    // ---- 勾选与时段下拉 ----（change 走同一个监听器，和象限一个套路）
+    root.addEventListener('change', function (e) {
+      var info = timeItemOf(e.target);
+      if (!info || !info.quadrantId || !info.taskId) return;
+
+      // 时段下拉（DS 2.12）：选中「未设定」（value 为空串）= 清除。
+      // 改了时段条目就换组（清除则离开时间视图）—— 由 renderCurrent
+      // 重画解决，DOM 不手动挪
+      if (closest(e.target, 'slot__select')) {
+        if (Store.isProtectionMode()) return;
+        var slotValue = e.target.value === '' ? null : e.target.value;
+        var slotResult = (info.kind === 'stage')
+          ? TaskOps.setStageSlot(state.data, state.date, info.quadrantId,
+                                 info.taskId, info.stageId, slotValue)
+          : TaskOps.setSlot(state.data, state.date, info.quadrantId,
+                            info.taskId, slotValue);
+        if (slotResult.ok) persist();
+        renderCurrent();
+        return;
+      }
+
+      if (closest(e.target, 'task__check')) {
+        commitEdit();
+        // 任务条目都是「无阶段任务本体」（有阶段的进组的是阶段，见 getTimeView），
+        // 所以这里就是勾这条任务自己
+        doToggle(info.quadrantId, info.taskId, e.target.checked);
+        return;
+      }
+
+      if (closest(e.target, 'stage__check')) {
+        commitEdit();
+        doToggleStage(info.quadrantId, info.taskId, info.stageId, e.target.checked);
+        return;
+      }
+    });
+
+    // ---- 编辑框里的键盘 / 失焦即提交（和象限、计划池同一个套路）----
+    root.addEventListener('keydown', function (e) {
+      if (!closest(e.target, 'task__input') && !closest(e.target, 'stage__input')) return;
+
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        commitEdit();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        cancelEdit();
+      }
+    });
+
+    root.addEventListener('focusout', function (e) {
+      if (!closest(e.target, 'task__input') && !closest(e.target, 'stage__input')) return;
+      var input = e.target;
+
+      // 放到下一个事件循环再提交（原因见 bindQuadrants 的失焦处理）
+      setTimeout(function () {
+        if (!document.body.contains(input)) return;
+        commitEdit();
+      }, 0);
+    });
+  }
+
   // -------------------------------------------------------------------------
   // 启动
   // -------------------------------------------------------------------------
+
 
   /** 时间视图切换（DS 2.13）：四象限 ⇄ 时间视图，按钮文字跟着当前状态变 */
   function bindViewToggle() {
@@ -1279,6 +1411,7 @@ var App = (function (CONFIG, Util, Store, Toast, Theme, Render, TaskOps, Drag, D
     state.date = Util.todayStr();
 
     bindQuadrants();
+    bindTimeView();
     bindPool();
     bindTemplates();
     bindDateNav();
