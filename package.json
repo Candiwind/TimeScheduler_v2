@@ -1,15 +1,15 @@
 {
-  "name": "timescheduler",
+  "name": "mypal",
   "version": "1.0.0",
   "private": true,
-  "description": "四象限任务管理（网页版 + 安卓 App）",
+  "description": "MyPal（网页版 + 安卓 App）",
   "scripts": {
     "test": "node tools/run-tests.js",
     "sync:web": "node tools/copy-web.js",
     "android:add": "npm run sync:web && npx cap add android",
     "android:sync": "npm run sync:web && npx cap sync android",
     "android:open": "npm run android:sync && npx cap open android",
-    "android:build": "npm run android:sync && cd android && gradlew.bat assembleDebug"
+    "android:build": "npm run android:sync && cd android && .\\gradlew.bat assembleDebug"
   },
   "dependencies": {
     "@capacitor/android": "^6.0.0",

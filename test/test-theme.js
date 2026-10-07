@@ -127,8 +127,9 @@ t('主数据对象里没有主题', function () {
 
   var data = Store.createEmpty();
   var keys = Object.keys(data).sort();
-  h.assertEqual(keys.join(','), 'dates,pool,schemaVersion,templates,user',
-    '主题永远不进主数据（pool / templates 是 v1.1 的计划池 / 模板字段，见 DS 2.11 / 2.14）');
+  h.assertEqual(keys.join(','), 'dates,pool,reading,schemaVersion,templates,user',
+    '主题永远不进主数据（pool / templates 是 v1.1 的计划池 / 模板字段，' +
+    'reading 是 v2.8 的阅读栏，见 DS 2.11 / 2.14 / 2.37）');
 });
 
 t('切换主题不会往主数据里写任何东西', function () {

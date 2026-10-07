@@ -62,15 +62,15 @@ t('连续加的任务编号不重复', function () {
   }
 });
 
-t('新任务加在末尾，不会挤乱已有顺序', function () {
-  // 顺序是用户手动拖出来的（见 D-10），新任务插到开头会把它打乱
+t('新任务默认加在开头（需求 3）', function () {
+  // 需求（重命名后 3）：新加的东西排最前，用户刚敲进去的任务一眼就能看到
   var data = fresh();
   add(data, 'I', '第一');
   add(data, 'I', '第二');
   add(data, 'I', '第三');
 
   var texts = data.dates[DATE].I.map(function (x) { return x.text; });
-  h.assertEqual(texts.join(','), '第一,第二,第三');
+  h.assertEqual(texts.join(','), '第三,第二,第一');
 });
 
 t('首尾空白会被去掉', function () {
@@ -191,8 +191,9 @@ t('改的时候不会碰到别的任务', function () {
   var id2 = add(data, 'I', '第二条');
   TaskOps.editTask(data, DATE, 'I', id2, '第二条改过');
 
-  h.assertEqual(data.dates[DATE].I[0].text, '第一条');
-  h.assertEqual(data.dates[DATE].I[1].text, '第二条改过');
+  // 新任务默认加在开头（需求 3），所以「第二条」在最前
+  h.assertEqual(data.dates[DATE].I[0].text, '第二条改过');
+  h.assertEqual(data.dates[DATE].I[1].text, '第一条');
 });
 
 t('同一个 id 在别的象限里不算数', function () {
@@ -236,16 +237,22 @@ t('勾不存在的任务', function () {
   h.assertEqual(r.error, TaskOps.ERR.NOT_FOUND);
 });
 
-t('勾选不影响文本和顺序', function () {
+t('勾选完成沉到末尾，文本不变，取消勾选不回移（需求 6）', function () {
   var data = fresh();
   add(data, 'I', '第一');
   var id2 = add(data, 'I', '第二');
   add(data, 'I', '第三');
+  // 新任务默认加在开头（需求 3）：此时顺序是 第三,第二,第一
 
   TaskOps.toggleTask(data, DATE, 'I', id2);
 
   var texts = data.dates[DATE].I.map(function (x) { return x.text; });
-  h.assertEqual(texts.join(','), '第一,第二,第三', '顺序不该变');
+  h.assertEqual(texts.join(','), '第三,第一,第二', '勾完沉到末尾');
+
+  // 沉底是单向的：取消勾选不把它移回原位（需求 6 只豁免阶段，方向不可逆）
+  TaskOps.toggleTask(data, DATE, 'I', id2, false);
+  var texts2 = data.dates[DATE].I.map(function (x) { return x.text; });
+  h.assertEqual(texts2.join(','), '第三,第一,第二', '取消勾选不回移');
 });
 
 // ---------------------------------------------------------------------------
@@ -276,11 +283,12 @@ t('删中间那条，剩下的顺序保持', function () {
   add(data, 'I', '第一');
   var id2 = add(data, 'I', '第二');
   add(data, 'I', '第三');
+  // 新任务默认加在开头（需求 3）：此时顺序是 第三,第二,第一
 
   TaskOps.removeTask(data, DATE, 'I', id2);
 
   var texts = data.dates[DATE].I.map(function (x) { return x.text; });
-  h.assertEqual(texts.join(','), '第一,第三');
+  h.assertEqual(texts.join(','), '第三,第一');
 });
 
 t('删不存在的任务', function () {

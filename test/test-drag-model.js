@@ -28,7 +28,8 @@ function day(spec) {
   var quadrants = Object.keys(spec);
   for (var i = 0; i < quadrants.length; i++) {
     var texts = spec[quadrants[i]];
-    for (var k = 0; k < texts.length; k++) {
+    // addTask 默认把新任务加在开头（需求 3），所以倒着加，最终顺序才和 spec 一致
+    for (var k = texts.length - 1; k >= 0; k--) {
       var r = TaskOps.addTask(data, DATE, quadrants[i], texts[k]);
       if (!r.ok) throw new Error('测试数据没造出来：' + r.error);
     }

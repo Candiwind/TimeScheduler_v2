@@ -61,12 +61,12 @@ t('emptyDay 有四个象限，都是空列表', function () {
 });
 
 t('空数据对象里**不能**有同步凭据', function () {
-  // D-23：凭据是独立 key，主数据对象里永远只有 user / schemaVersion / dates / pool / templates
-  // （pool 是 v1.1 追加的计划池字段、templates 是 v1.1 追加的模板字段，
-  //  见 DS 2.3 / 2.11 / 2.14，schemaVersion 仍为 1）
+  // D-23：凭据是独立 key，主数据对象里永远只有 user / schemaVersion / dates /
+  // pool / templates / reading（pool、templates 是 v1.x 追加的，reading 是
+  // v2.8 追加的阅读栏，见 DS 2.3 / 2.11 / 2.14 / 2.37，schemaVersion 仍为 1）
   var data = Store.createEmpty();
   var keys = Object.keys(data).sort();
-  h.assertEqual(keys.join(','), 'dates,pool,schemaVersion,templates,user');
+  h.assertEqual(keys.join(','), 'dates,pool,reading,schemaVersion,templates,user');
 });
 
 // ---------------------------------------------------------------------------

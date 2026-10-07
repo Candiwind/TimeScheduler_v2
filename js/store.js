@@ -78,7 +78,10 @@ var Store = (function (CONFIG, Util) {
       // 老数据没有这个字段，normalize 读入时会补上
       pool: [],
       // 模板（见 DS 2.14）：同 pool 平级的全局列表。老数据没有 → normalize 补空
-      templates: []
+      templates: [],
+      // 阅读栏（v2.8 需求 2，见 DS 2.37）：同 pool / templates 平级的全局结构，
+      // 分「正在阅读」和「已读完成」两张表。老数据没有 → normalize 补空
+      reading: { active: [], done: [] }
     };
   }
 
@@ -117,13 +120,32 @@ var Store = (function (CONFIG, Util) {
       stage.slot = raw.slot;
     }
 
+    // bonus（需求 2）是**可选**布尔字段：只有 === true 才置 true，
+    // 其余一律视为普通项（不引入脏字段）
+    if (raw.bonus === true) {
+      stage.bonus = true;
+    }
+
+    // highlight（高亮，见 DS 2.40）同 bonus：可选布尔，只有 === true 才置 true。
+    // 加这个字段之前导出的备份里没有它，读进来就是「没高亮」，不用补默认值
+    if (raw.highlight === true) {
+      stage.highlight = true;
+    }
+
     return stage;
   }
 
-  /** 一堆阶段是不是全勾完了 */
-  function allStagesDone(stages) {
-    for (var i = 0; i < stages.length; i++) {
-      if (!stages[i].completed) return false;
+  /**
+   * 一堆单位是不是「全完成」（与 task-ops.getProgress 的 isComplete 镜像）。
+   *
+   * v2.5 口径：**每个单位都完成**才算完成 —— Bonus 也要完成。Bonus 只影响完成率
+   * 的分母（需求 2，分母不计 Bonus），不影响「全完成」这个判断。
+   * 空列表返回 false（空块不算完成）。
+   */
+  function allDone(units) {
+    if (!units.length) return false;
+    for (var i = 0; i < units.length; i++) {
+      if (!units[i].completed) return false;
     }
     return true;
   }
@@ -170,8 +192,9 @@ var Store = (function (CONFIG, Util) {
         task.stages = stages;
         // completed 是个**派生字段**，有阶段时一律以阶段为准 ——
         // 数据里存的那个值可能是手工改过的、或者别的版本写的，
-        // 不一致的时候相信阶段（阶段是用户一条条点出来的，更可信）
-        task.completed = allStagesDone(stages);
+        // 不一致的时候相信阶段（阶段是用户一条条点出来的，更可信）。
+        // 口径（v2.5）：每个阶段都完成才算完成，Bonus 阶段也算。
+        task.completed = allDone(stages);
       }
     }
 
@@ -187,18 +210,54 @@ var Store = (function (CONFIG, Util) {
       task.slot = raw.slot;
     }
 
+    // bonus（需求 2）同阶段：只有 === true 才置 true
+    if (raw.bonus === true) {
+      task.bonus = true;
+    }
+
+    // highlight（高亮，见 DS 2.40）同阶段：只有 === true 才置 true。
+    // 老备份里没有这个字段 → 读进来就是普通任务，兼容不受影响
+    if (raw.highlight === true) {
+      task.highlight = true;
+    }
+
     return { task: task, dropped: dropped };
   }
 
   /**
-   * 块是不是「完成」：所有子任务都完成才算。**空块一律不算完成**。
+   * 块内「最细可勾选单位」数一遍（与 task-ops.progressOfItem 镜像）。
+   * 有阶段的任务按阶段算，没阶段的按任务自己算。
+   * 返回 { done, allCount }：done = 已完成单位数，allCount = 全部单位数。
+   */
+  function countUnits(tasks) {
+    var done = 0, allCount = 0;
+    for (var i = 0; i < tasks.length; i++) {
+      var t = tasks[i];
+      var stages = (t && Array.isArray(t.stages)) ? t.stages : [];
+      if (stages.length) {
+        for (var s = 0; s < stages.length; s++) {
+          allCount++;
+          if (stages[s].completed) done++;
+        }
+      } else {
+        allCount++;
+        if (t.completed) done++;
+      }
+    }
+    return { done: done, allCount: allCount };
+  }
+
+  /**
+   * 块是不是「完成」：块内**每个单位都完成**才算（v2.5：Bonus 单位也算数）。
+   * **空块一律不算完成**。
    *
    * 不能照搬 allStagesDone —— 那个函数对空列表返回 true（阶段永远不为空，
    * 所以那边没问题），块是从空块开始的，照搬的话新建的块会一出生就是「已完成」。
    */
   function blockDone(tasks) {
-    if (!tasks.length) return false;
-    return allStagesDone(tasks);
+    var c = countUnits(tasks);
+    if (c.allCount === 0) return false;   // 空块一律未完成
+    return c.done === c.allCount;
   }
 
   /**
@@ -237,19 +296,27 @@ var Store = (function (CONFIG, Util) {
         }
       }
 
-      return {
-        item: {
-          id: typeof raw.id === 'string' && raw.id ? raw.id : Util.genId(),
-          type: 'block',
-          text: bText,
-          completed: blockDone(children),
-          createdAt: typeof raw.createdAt === 'number' && isFinite(raw.createdAt)
-            ? raw.createdAt
-            : clock(),
-          tasks: children
-        },
-        dropped: bDropped
+      // 原先是个直接 return 的字面量，拆成变量只为了按需挂 highlight ——
+      // 可选字段不进字面量，免得写出 highlight: false 这种脏值
+      var blockItem = {
+        id: typeof raw.id === 'string' && raw.id ? raw.id : Util.genId(),
+        type: 'block',
+        text: bText,
+        completed: blockDone(children),
+        createdAt: typeof raw.createdAt === 'number' && isFinite(raw.createdAt)
+          ? raw.createdAt
+          : clock(),
+        tasks: children
       };
+
+      // highlight（高亮，见 DS 2.40）同任务 / 阶段：只有 === true 才置 true。
+      // 注意块的高亮**不传染**给块内任务：块头标黄只是「这块整体先看着」，
+      // 块内任务各有各的高亮（和 bonus 一样，两者互不影响）
+      if (raw.highlight === true) {
+        blockItem.highlight = true;
+      }
+
+      return { item: blockItem, dropped: bDropped };
     }
 
     // ---- 普通任务 ----
@@ -303,6 +370,98 @@ var Store = (function (CONFIG, Util) {
   }
 
   /**
+   * 清洗一条阅读栏条目（v2.8 需求 2，见 DS 2.37）。
+   *
+   * 形状 = { id, text, start, doneAt, createdAt }：
+   *   - text  书名 / 事项名，去空白后不能为空（和任务同一条规矩）；
+   *   - start 开始阅读的**日期** 'YYYY-MM-DD'，没设就是 null（**不是**空串 ——
+   *           空串在这里当「没设」，存进去只会让别处的判断多一种情况）；
+   *   - doneAt 读完那天的 'YYYY-MM-DD'，正在阅读的条目是 null。
+   *
+   * 两个日期走的是**宽松**校验（Util.isValidReadingStamp）：老文件里的
+   * 'HH:MM' 原样收下，不抹掉 —— 兼容优先，见 DS 2.37 修订。
+   *
+   * 整理不了（不是对象 / 没文本）返回 null，当脏数据丢掉。
+   */
+  function normalizeReadingItem(raw) {
+    if (!isPlainObject(raw)) return null;
+
+    var text = Util.cleanText(raw.text);
+    if (!text) return null; // 没名字的阅读条目没有意义
+
+    return {
+      id: typeof raw.id === 'string' && raw.id ? raw.id : Util.genId(),
+      text: text,
+      start: Util.isValidReadingStamp(raw.start) ? raw.start : null,
+      doneAt: Util.isValidReadingStamp(raw.doneAt) ? raw.doneAt : null,
+      createdAt: typeof raw.createdAt === 'number' && isFinite(raw.createdAt)
+        ? raw.createdAt
+        : clock()
+    };
+  }
+
+  /**
+   * 清洗整块阅读栏：{ active: [...], done: [...] }。
+   *
+   * 返回的 doneAt 会被**强制**对齐所在的那张表：正在阅读表里的条目一律把
+   * doneAt 抹成 null，已完成表里的条目一律得有个日期（脏数据就补**今天**）。
+   * 这么做的原因是「在哪张表」是唯一的完成判据 —— 留着一个和所在表矛盾的
+   * doneAt，只会让别处多出一道「到底信哪个」的判断（见 DS 2.37）。
+   */
+  function normalizeReading(raw) {
+    var out = { active: [], done: [] };
+    if (!isPlainObject(raw)) return { reading: out, dropped: 0 };
+
+    var dropped = 0;
+    var tables = [['active', raw.active], ['done', raw.done]];
+    for (var t = 0; t < tables.length; t++) {
+      var name = tables[t][0];
+      var list = tables[t][1];
+      if (!Array.isArray(list)) continue;
+
+      for (var i = 0; i < list.length; i++) {
+        var item = normalizeReadingItem(list[i]);
+        if (!item) {
+          dropped++;
+          continue;
+        }
+        item.doneAt = (name === 'done') ? (item.doneAt || Util.todayStr()) : null;
+        out[name].push(item);
+      }
+    }
+    return { reading: out, dropped: dropped };
+  }
+
+  /**
+   * 清洗「时间视图顺序记忆」（需求 3，见 DS 2.17）。
+   *
+   * 形状是 { 时段: [键, ...] }，键 = 't:'+taskId 或 's:'+taskId+':'+stageId。
+   * 键必须 ∈ CONFIG.SLOTS，值必须是数组、元素必须是非空字符串。
+   * 只拷合法条目；没有任何合法条目就返回 null（不挂 tv 字段，空日期随之丢掉）。
+   */
+  function sanitizeTvOrder(rawTv) {
+    if (!isPlainObject(rawTv)) return null;
+
+    var tv = null;
+    var slots = CONFIG.SLOTS;
+    for (var s = 0; s < slots.length; s++) {
+      var slot = slots[s];
+      var list = rawTv[slot];
+      if (!Array.isArray(list)) continue;
+
+      var keys = [];
+      for (var i = 0; i < list.length; i++) {
+        if (typeof list[i] === 'string' && list[i]) keys.push(list[i]);
+      }
+      if (!keys.length) continue;
+
+      if (!tv) tv = {};
+      tv[slot] = keys;
+    }
+    return tv;
+  }
+
+  /**
    * 把解析出来的原始对象整理成标准数据，并报告丢掉了多少条脏任务。
    *
    * 顶层结构（dates 必须是对象）不对就直接抛错 —— 那说明整份数据不可信，
@@ -353,25 +512,25 @@ var Store = (function (CONFIG, Util) {
         }
       }
 
+      // tv（时间视图顺序记忆，需求 3）是**可选**字段：清洗后挂到 day 上。
+      // 整天都是空的就不占地方了（tv 也跟着一起丢掉，见 DS 2.17）
+      var tv = sanitizeTvOrder(rawDay.tv);
+      if (tv) day.tv = tv;
+
       // 整天都是空的就不占地方了
       if (hasAny) dates[dateStr] = day;
     }
 
     // ---- 计划池（见 DS 2.11）----
-    // 元素就是任务形状，按任务的清洗规则走；块不该出现在池里
-    // （池只装「推迟下来的任务」），出现即当脏数据丢掉。
-    // 老数据没有 pool 字段 —— 补一个空数组，schemaVersion 不动（纯追加）
+    // 元素可以是任务，也可以是任务块（需求：任务块整体推迟进池 / 池里手动加块）。
+    // 都走 normalizeItem 同一条「尽量救」路线；老数据没有 pool 字段 ——
+    // 补一个空数组，schemaVersion 不动（纯追加）
     var pool = [];
     if (Array.isArray(raw.pool)) {
       for (var p = 0; p < raw.pool.length; p++) {
-        var rawPoolItem = raw.pool[p];
-        if (isPlainObject(rawPoolItem) && rawPoolItem.type === 'block') {
-          dropped++;
-          continue;
-        }
-        var poolItem = normalizeTask(rawPoolItem);
+        var poolItem = normalizeItem(raw.pool[p]);
         if (poolItem) {
-          pool.push(poolItem.task);
+          pool.push(poolItem.item);
           dropped += poolItem.dropped;
         } else {
           dropped++;
@@ -394,6 +553,12 @@ var Store = (function (CONFIG, Util) {
       }
     }
 
+    // ---- 阅读栏（v2.8 需求 2，见 DS 2.37）----
+    // 和 pool / templates 同一条规矩：老数据没有 reading 字段 → 补空表
+    var readingResult = normalizeReading(raw.reading);
+    var reading = readingResult.reading;
+    dropped += readingResult.dropped;
+
     return {
       data: {
         user: typeof raw.user === 'string' && raw.user ? raw.user : CONFIG.USER_ID,
@@ -403,7 +568,10 @@ var Store = (function (CONFIG, Util) {
           : CONFIG.SCHEMA_VERSION,
         dates: dates,
         pool: pool,
-        templates: templates
+        templates: templates,
+        // 阅读栏（v2.8 需求 2）：和 pool / templates 同款 —— 老数据没有这个
+        // 字段 → 补一张空表，schemaVersion 不动（纯追加）
+        reading: reading
       },
       dropped: dropped
     };
@@ -670,6 +838,43 @@ var Store = (function (CONFIG, Util) {
     return t;
   }
 
+  /**
+   * 读折叠 / 展开状态（需求 5）。读不出、结构不对都给一份空表 ——
+   * 最多就是刷新后回到「默认折叠 / 默认展开」，不算丢数据。
+   *
+   * v2.8 起多一张 collapsedPanels（哪些**板块**收起了，见需求 3 / DS 2.38）：
+   * 和「任务展开 / 块折叠」是同一种界面状态，所以共用这一份存取，不另开
+   * 一个 storage key —— 两处分开存只会多一个会坏、会不同步的地方。
+   */
+  function getFoldState() {
+    try {
+      var text = storage.getItem(CONFIG.KEYS.foldState);
+      if (!text) return { expanded: {}, collapsedBlocks: {}, collapsedPanels: {} };
+      var parsed = JSON.parse(text);
+      return {
+        expanded: (parsed && typeof parsed.expanded === 'object' && parsed.expanded)
+          ? parsed.expanded : {},
+        collapsedBlocks: (parsed && typeof parsed.collapsedBlocks === 'object' && parsed.collapsedBlocks)
+          ? parsed.collapsedBlocks : {},
+        collapsedPanels: (parsed && typeof parsed.collapsedPanels === 'object' && parsed.collapsedPanels)
+          ? parsed.collapsedPanels : {}
+      };
+    } catch (e) {
+      return { expanded: {}, collapsedBlocks: {}, collapsedPanels: {} };
+    }
+  }
+
+  /** 存折叠 / 展开状态。存不上也不该影响主流程 */
+  function setFoldState(fold) {
+    try {
+      storage.setItem(CONFIG.KEYS.foldState, JSON.stringify({
+        expanded: (fold && fold.expanded) || {},
+        collapsedBlocks: (fold && fold.collapsedBlocks) || {},
+        collapsedPanels: (fold && fold.collapsedPanels) || {}
+      }));
+    } catch (e) { /* 界面状态存不上不是大事 */ }
+  }
+
   // -------------------------------------------------------------------------
   // 读取（DS 2.4 的恢复流程）
   // -------------------------------------------------------------------------
@@ -851,7 +1056,11 @@ var Store = (function (CONFIG, Util) {
     normalizeTask: normalizeTask,
     normalizeItem: normalizeItem,
     normalizeTemplate: normalizeTemplate,
+    normalizeReading: normalizeReading,
+    normalizeReadingItem: normalizeReadingItem,
     blockDone: blockDone,
+    allDone: allDone,
+    sanitizeTvOrder: sanitizeTvOrder,
     serialize: serialize,
     parse: parse,
 
@@ -873,6 +1082,9 @@ var Store = (function (CONFIG, Util) {
 
     getTheme: getTheme,
     setTheme: setTheme,
+
+    getFoldState: getFoldState,
+    setFoldState: setFoldState,
 
     planArchive: planArchive,
     applyArchive: applyArchive,

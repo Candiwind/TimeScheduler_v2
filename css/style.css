@@ -21,6 +21,12 @@
   --q4: #2ecc71;
 
   --done-opacity: .45;
+
+  /* 高亮（requirements 最新一条，见 DS 2.40）：浅橙底色 + 深色文字。
+     文字颜色是**定死**的，不跟主题走 —— 底色是浅的，暗色主题下用 --text
+     （浅灰）会糊成一片看不清，所以两种主题都用这个深色（见 FS 验收）。 */
+  --hl-bg: #ffd8a8;
+  --hl-text: #3a2a12;
 }
 
 [data-theme="dark"] {
@@ -95,6 +101,26 @@ body {
 .topbar__date { display: flex; align-items: center; gap: 6px; }
 .topbar__actions { display: flex; align-items: center; gap: 6px; margin-left: auto; }
 
+/* 搜索（需求 3）：右上角 🔍 点开后的输入框，和顶栏按钮同高 */
+.search-input {
+  font: inherit;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 8px;
+  min-height: 32px;
+  width: 160px;
+}
+.search-input:focus { outline: none; border-color: var(--text-dim); }
+/* 搜索开着时给 🔍 一个「激活」态，一眼知道现在看到的是过滤后的内容 */
+.btn--on { border-color: var(--text-dim); background: var(--bg); }
+
+/* 手机端搜索框别太宽，给别的按钮留位置 */
+@media (max-width: 600px) {
+  .search-input { width: 120px; }
+}
+
 .date-picker {
   font: inherit;
   color: var(--text);
@@ -141,6 +167,7 @@ body {
 .quadrants[hidden],
 .pool[hidden],
 .templates[hidden],
+.reading[hidden],
 .timeview[hidden] { display: none; }
 
 /* ---------------------------------------------------------------------------
@@ -149,7 +176,9 @@ body {
 .quadrants {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  grid-template-rows: 1fr 1fr;
+  /* 需求 1：四个象限高度互不牵制 —— 行高按内容来，条目别再被拉伸成一样高 */
+  grid-template-rows: auto auto;
+  align-items: start;
   gap: 12px;
   min-height: calc(100vh - 120px);
 }
@@ -198,6 +227,8 @@ body {
   overflow-y: auto;
   padding: 6px 0;
   min-height: 60px;
+  /* 需求 5：象限设最大高度，超过后右侧滚动（网页版 60vh；移动端 40vh 见文件末尾） */
+  max-height: 60vh;
 }
 
 .quadrant__empty {
@@ -253,13 +284,11 @@ body {
 
 /* li.task 现在是个**容器**：上面一行是任务本身，展开时下面挂阶段列表。
    所以行内的排列交给 .task__row，li 自己不管布局。 */
-/* 拖拽手势只在四象限里有（时间视图的条目复用 .task 类名但不可拖，见 DS 2.13），
-   所以这两条样式限定在 #quadrants 里，别误伤时间视图 */
+/* 拖拽手势的样式只限定在 #quadrants 里，别误伤时间视图（时间视图条目用
+   .timeview__item，见 DS 2.13）。拖动把手是勾选框（需求 7 / D-48），
+   行本体恢复正常的触摸滚动，所以这里不再设 touch-action */
 #quadrants .task {
   cursor: grab;
-  /* 触摸拖拽和页面滚动会打架 —— 这条是为拖拽让路的临时取舍，
-     必须真机确认，见 DS 5.3 */
-  touch-action: none;
 }
 
 .task__row {
@@ -271,6 +300,14 @@ body {
   word-break: break-word;
 }
 .task__row:hover { background: var(--bg); }
+
+/* 行内「右侧动作区」（v2.11 需求 2，见 DS 2.46 / D-76）。
+   它把文字右边那一串控件（完成度 / 三角 / 时段 / Bonus / ＋ / 推迟 / 删除…）
+   收进一个盒子，只为手机端的「装不下时**整组**折行 + 靠右对齐」服务。
+   桌面端**不生成这个盒子**（display: contents）：宽屏一行放得下，多一层
+   盒子只会把原有的 gap 与对齐拆散，换成 contents 后与没这层完全等价。
+   —— 手机端的覆盖写在 max-width: 600px 里。 */
+.task__actions { display: contents; }
 
 /* 有阶段时显示「3/5」。没阶段的任务不显示 —— 显示「0/1」是废话 */
 .task__progress {
@@ -413,6 +450,42 @@ body {
 /* 拖拽克隆上不显示下拉（同 .drag-ghost 里按钮的处理） */
 .drag-ghost .slot__select { visibility: hidden; }
 
+/* ---------------------------------------------------------------------------
+   Bonus（需求 2）：任务行 / 阶段行上的 🎁 标记按钮。
+   它是「状态开关」，不是「一次性动作」，所以始终可见——off 时淡一点，
+   on（bonus--on）时点亮并垫一层浅黄底。图标就是礼品 🎁。
+   --------------------------------------------------------------------------- */
+.task__bonus,
+.stage__bonus {
+  flex: 0 0 auto;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--text-dim);
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  padding: 2px 4px;
+  cursor: pointer;
+  /* 触摸目标别做小（见 DS 3.3） */
+  min-width: 28px;
+  min-height: 28px;
+  opacity: .4;
+}
+.task__bonus:hover,
+.stage__bonus:hover { opacity: 1; }
+.task__bonus.bonus--on,
+.stage__bonus.bonus--on {
+  opacity: 1;
+  background: color-mix(in srgb, var(--q3) 22%, var(--surface));
+}
+
+/* 时间视图条目里那只展示、不能点的 🎁（Bonus 只能在四象限里改） */
+.bonus__mark {
+  flex: 0 0 auto;
+  font-size: 13px;
+}
+
 /* 正在被拖的那条：留在原位但变淡，让人看出「是从这儿拿起来的」 */
 .task--dragging { opacity: .35; }
 
@@ -430,9 +503,13 @@ body {
   box-shadow: 0 6px 18px rgba(0, 0, 0, .18);
   opacity: .95;
 }
-/* 克隆出来的那条也会带上 .task__del / .block__del，悬停时冒出一个 ×，很怪 */
+/* 克隆出来的那条也会带上 .task__del / .block__del / .block__postpone，悬停时冒出个按钮很怪 */
 .drag-ghost .task__del,
-.drag-ghost .block__del { display: none; }
+.drag-ghost .block__del,
+.drag-ghost .block__postpone { display: none; }
+/* 池内条目 / 池内块头上的「导入」（v2.6 需求 2）：拖拽克隆上同样不冒出来 */
+.drag-ghost .pool__import,
+.drag-ghost .pool__block-import { display: none; }
 
 /* 落点占位：拖到哪儿，哪儿就腾出这么一块地方 */
 .task--placeholder {
@@ -452,6 +529,19 @@ body.is-dragging .task,
 body.is-dragging .block { cursor: grabbing; }
 
 .task__check { margin-top: 3px; flex: 0 0 auto; }
+
+/* 需求 7 / D-48：拖动把手 = 勾选框。touch-action 在手势开始那一刻就定死，
+   只在勾选框上设 none，按住它拖时页面不滚、拖拽才能接管；行其余区域照常滚动 */
+/* v2.10 需求 2：池里的勾选框也升格成把手 —— 手机端「象限模式和计划池中所
+   有任务/阶段的拖拽」都只在勾选框上发起，池条目其余区域不再拦截触摸、
+   留给正常滚动（顺带解决 R-33 的「池列表在手机上滚不动」） */
+.task__check,
+.stage__check,
+.block__check,
+.pool__check,
+.pool__block-check {
+  touch-action: none;
+}
 
 .task__text {
   flex: 1;
@@ -494,7 +584,6 @@ body.is-dragging .block { cursor: grabbing; }
   border-left: 3px solid var(--q2);
   border-radius: 6px;
   cursor: grab;
-  touch-action: none;
 }
 
 .block__head {
@@ -554,6 +643,26 @@ body.is-dragging .block { cursor: grabbing; }
   .block__del { opacity: .6; }
 }
 
+/* 整体推迟（需求 1）：和「删除」同款的低调文字按钮 —— hover 才出现、
+   触摸端常显，不再是一颗抢眼的实心按钮 */
+.block__postpone {
+  flex: 0 0 auto;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--text-dim);
+  background: transparent;
+  border: 0;
+  padding: 2px 6px;
+  cursor: pointer;
+  opacity: 0;
+}
+.block:hover .block__postpone { opacity: 1; }
+.block__postpone:hover { color: var(--text); }
+@media (hover: none) {
+  .block__postpone { opacity: .6; }
+}
+
 /* 块内任务列表：往右缩进一层，和块的归属关系一眼可见 */
 .block__tasks {
   list-style: none;
@@ -579,6 +688,16 @@ body.is-dragging .block { cursor: grabbing; }
 .block--placeholder {
   border: 1px dashed var(--q2);
   border-left: 3px dashed var(--q2);
+  background: transparent;
+  cursor: default;
+}
+
+/* 时间视图拖拽的同款机制（需求 3） */
+.timeview__item--dragging { opacity: .35; }
+.timeview__item--placeholder {
+  margin: 2px 0;
+  border: 1px dashed var(--q2);
+  border-radius: 6px;
   background: transparent;
   cursor: default;
 }
@@ -632,14 +751,32 @@ body.is-dragging .block { cursor: grabbing; }
   font-size: 13px;
 }
 
-.pool__list { list-style: none; margin: 0; padding: 2px 0; }
+.pool__list {
+  list-style: none;
+  margin: 0;
+  padding: 2px 0;
+  /* 需求 5：计划池最大高度，超过后右侧滚动 */
+  max-height: 40vh;
+  overflow-y: auto;
+}
 
-/* 池内的行比象限里的任务更轻：它不在任何一天里，只是等着被安排 */
+/* 池内的行比象限里的任务更轻：它不在任何一天里，只是等着被安排。
+   v2.10 需求 2：行本体**不再**设 touch-action:none —— 触摸端的把手只有勾选框
+   （见 .check 那一组的规则），行其余区域留着让手指滚列表。鼠标仍然整行可拖 */
 .pool__item {
   cursor: grab;
-  touch-action: none;
 }
 .pool__item--dragging { opacity: .35; }
+
+/* 池内排序的落点占位（v2.6 需求 1）。不用 .task--placeholder —— 池行的高度和
+   内边距和象限任务不同，复用会让占位忽高忽低 */
+.pool__item--placeholder {
+  margin: 2px 0;
+  border: 1px dashed var(--q2);
+  border-radius: 6px;
+  background: transparent;
+  cursor: default;
+}
 
 .pool__text {
   flex: 1;
@@ -647,6 +784,17 @@ body.is-dragging .block { cursor: grabbing; }
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   cursor: text;
+}
+
+/* 池内勾选框（v2.7 需求 1）：和 task__check 一样贴顶对齐。
+   它**不是**拖拽把手（D-62）—— 池内整条照旧可拖，所以这里不设 touch-action */
+.pool__check { margin-top: 3px; flex: 0 0 auto; }
+
+/* 池内完成态：划掉 + 降透明度（和 .task--done .task__text 同款，但池行的
+   类名不是 task，那条选择器套不上）。勾完不移出池，只沉到所在列表末尾 */
+.pool__item--done .pool__text {
+  text-decoration: line-through;
+  opacity: var(--done-opacity);
 }
 
 /* 池内删除。和 task__del 一个路数：hover 才出现，触摸端常显 */
@@ -685,6 +833,26 @@ body.is-dragging .block { cursor: grabbing; }
 .pool__date--empty { opacity: .45; font-style: italic; }
 .pool__date--empty:hover { opacity: .8; }
 
+/* 导入到第二象限（v2.6 需求 2）：池行上的动作按钮。
+   比删除按钮显眼一点（它是这一版要让用户找到的新入口），但仍然低调：
+   无底色、淡色文字、常显而不是藏进 hover —— 藏起来的新功能等于没有 */
+.pool__import,
+.pool__block-import {
+  flex: 0 0 auto;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--text-dim);
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  padding: 4px 6px;
+  cursor: pointer;
+  opacity: .6;
+}
+.pool__import:hover,
+.pool__block-import:hover { color: var(--text); opacity: 1; }
+
 /* 日期编辑态：原地换成一个日期输入框 + 清除按钮（都在编辑行里，常显） */
 .pool__date-input {
   flex: 0 1 auto;
@@ -709,6 +877,89 @@ body.is-dragging .block { cursor: grabbing; }
   cursor: pointer;
 }
 .pool__date-clear:hover { color: var(--text); }
+
+/* 计划池里的任务块（需求 4）：轻量分组，折叠三角和象限块同款。
+   v2.8 需求 2：**外框和象限里的任务块（.block）对齐** —— 浅蓝底 +
+   完整 1px 边框 + 蓝色左边框（--q2，就是象限 II 的那个蓝）+ 圆角。
+   池里原先只有一条灰竖线，两边看着不像同一种东西（见 DS 2.39）。
+   块头和块内列表的内边距保持池自己的值：池面板比象限窄，照搬象限的
+   30px 缩进会把内容挤出可视区。 */
+.pool__block {
+  margin: 4px 0;
+  background: color-mix(in srgb, var(--q2) 4%, var(--surface));
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--q2);
+  border-radius: 6px;
+  padding: 0 6px;
+}
+.pool__block-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0;
+  /* v2.6 需求 1：块头按住能拖（池内换顺序）。鼠标照旧整条块头可拖；
+     触摸端从 v2.10 需求 2 起改成只有块头的勾选框是把手，所以这里**不再**
+     设 touch-action —— 手指落在块头上是滚列表，不是拖块。
+     （该属性必须挂在起手的地方，手势一开始就定死） */
+  cursor: grab;
+}
+.pool__block-toggle {
+  font: inherit;
+  line-height: 1;
+  color: var(--text-dim);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  padding: 0;
+  min-width: 24px;
+  min-height: 24px;
+}
+.pool__block-toggle:hover { color: var(--text); }
+
+/* 块头勾选框（v2.7 需求 1）：一键全勾 / 全取消块内。同 .pool__check ——
+   v2.10 需求 2 起它同时是**触摸端的拖动把手**（touch-action:none 在勾选框那
+   一组的规则里），按住它能把整块拖走；块头其余区域留给滚动 */
+.pool__block-check { flex: 0 0 auto; margin-top: 3px; }
+
+.pool__block-name { flex: 1; min-width: 0; font-weight: 600; cursor: text; }
+
+/* 块完成态：块名划掉变淡（.block--done .block__name 的池内版本） */
+.pool__block--done .pool__block-name {
+  text-decoration: line-through;
+  opacity: var(--done-opacity);
+}
+.pool__block-add {
+  font: inherit;
+  line-height: 1;
+  color: var(--text-dim);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  padding: 0;
+  min-width: 24px;
+  min-height: 24px;
+}
+.pool__block-add:hover { color: var(--text); }
+.pool__block-del {
+  font: inherit;
+  line-height: 1;
+  color: var(--text-dim);
+  background: transparent;
+  border: 0;
+  padding: 2px 6px;
+  cursor: pointer;
+}
+.pool__block-del:hover { color: var(--text); }
+.pool__block-tasks {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 0 8px;
+}
+.pool__block-empty {
+  color: var(--text-dim);
+  font-size: 12px;
+  padding: 4px 0;
+}
 
 /* ---------------------------------------------------------------------------
    模板面板（DS 2.14）：视觉上是计划池的姊妹面板 ——
@@ -759,7 +1010,14 @@ body.is-dragging .block { cursor: grabbing; }
   font-size: 13px;
 }
 
-.tpl__list { list-style: none; margin: 0; padding: 2px 0; }
+.tpl__list {
+  list-style: none;
+  margin: 0;
+  padding: 2px 0;
+  /* 需求 5：模板池最大高度，超过后右侧滚动 */
+  max-height: 40vh;
+  overflow-y: auto;
+}
 
 .tpl__name {
   flex: 1;
@@ -826,6 +1084,232 @@ body.is-dragging .block { cursor: grabbing; }
 .drag-ghost .stage__postpone { opacity: 0; }
 
 /* ---------------------------------------------------------------------------
+   板块收起（v2.8 需求 3）
+   阅读栏 / 计划池 / 模板池三个板块都能收起，收起状态记在本机、刷新后保持
+   （见 DS 2.38）。收起只藏正文，头部那一行留着 —— 不然用户连展开的入口都没了。
+   --------------------------------------------------------------------------- */
+.panel__toggle {
+  flex: 0 0 auto;
+  font: inherit;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--text-dim);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  padding: 0 2px;
+  /* 触摸目标别做小（见 DS 3.3） */
+  min-width: 24px;
+  min-height: 24px;
+  transition: transform .15s ease;
+}
+.panel__toggle:hover { color: var(--text); }
+
+/* 收起时三角转成朝右，和面板的折叠方向对上 */
+.is-collapsed .panel__toggle { transform: rotate(-90deg); }
+
+.pool.is-collapsed .pool__list,
+.pool.is-collapsed .pool__empty,
+.templates.is-collapsed .tpl__list,
+.templates.is-collapsed .tpl__empty,
+.reading.is-collapsed .reading__list,
+.reading.is-collapsed .reading__done,
+.reading.is-collapsed .reading__empty { display: none; }
+
+/* 收起后头部那条下边框看着多余（下面已经没东西了） */
+.pool.is-collapsed .pool__head,
+.templates.is-collapsed .tpl__head,
+.reading.is-collapsed .reading__head { border-bottom: 0; }
+
+/* ---------------------------------------------------------------------------
+   阅读栏（v2.8 需求 2，见 DS 2.37）
+   放在四象限上面：上面「正在阅读」，下面「已读完成」。
+   下面那段有展示上限 —— 用最大高度 + 右侧滚动条，和其余面板同一套做法，
+   数据一条不丢（见 D-66）。
+   --------------------------------------------------------------------------- */
+.reading {
+  margin-bottom: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--q1);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.reading__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 14px;
+  color: var(--text-dim);
+}
+.reading__name { font-weight: 600; color: var(--text); }
+
+/* 正在阅读的条数：没超上限时是普通的灰色小字，超了才变醒目 —— 只是提示，
+   不拦着加（需求原话「提示不超过3项」，见 D-64） */
+.reading__count { font-size: 12px; color: var(--text-dim); }
+.reading__count--over { color: var(--q1); font-weight: 600; }
+
+.reading__add {
+  margin-left: auto;
+  font: inherit;
+  line-height: 1;
+  color: var(--text-dim);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  min-width: 32px;
+  min-height: 32px;
+  padding: 0;
+}
+.reading__add:hover { color: var(--text); }
+
+.reading__empty,
+.reading__none,
+.reading__done-empty {
+  margin: 0;
+  padding: 10px 12px;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+.reading__none { list-style: none; }
+
+.reading__list,
+.reading__done-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 40vh;
+  overflow-y: auto;
+}
+
+.reading__item {
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid var(--border);
+}
+.reading__item:last-child { border-bottom: 0; }
+.reading__item .task__row { flex: 1 1 auto; min-width: 0; }
+
+/* 勾选框只做勾选，不是拖拽把手 —— 阅读栏整块不参与拖拽，所以不设 touch-action */
+.reading__check { flex: 0 0 auto; margin-top: 3px; }
+
+.reading__text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.reading__item--done .reading__text {
+  text-decoration: line-through;
+  opacity: var(--done-opacity, .55);
+}
+
+/* 起始日期：没设时是灰的虚按钮，设了就显示日期（和池里的完成时间同款） */
+/* 起始日期按钮：**和池里的完成时间（.pool__date）逐条一致**（需求
+   「改成和计划池的日期设定类似的格式」，见 DS 2.37 修订三 / D-70）。
+   连 hover、--empty 一起对齐，测试按选择器取规则体比对声明清单 ——
+   改了一处忘了另一处，测试会红。 */
+.reading__start {
+  flex: 0 0 auto;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--text-dim);
+  background: transparent;
+  border: 0;
+  padding: 4px 6px;
+  cursor: pointer;
+  opacity: .8;
+}
+.reading__start:hover { color: var(--text); opacity: 1; }
+.reading__start--empty { opacity: .45; font-style: italic; }
+.reading__start--empty:hover { opacity: .8; }
+
+/* 日期编辑态：和池里的 pool__date-input 同一副模样（同一个控件，别做成两样） */
+.reading__start-input {
+  flex: 0 1 auto;
+  font: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--q2);
+  border-radius: 6px;
+  padding: 3px 6px;
+  /* 和别的输入框一样：不能为了紧凑把可点区域做小（见 DS 3.3） */
+  min-height: 32px;
+}
+
+/* 编辑起始日期时的「清除」：清成「未设定」（不是删条目）。
+   样式和文案都和池里的 .pool__date-clear 逐条一致 —— 同一个动作不该有两个模样 */
+.reading__start-clear {
+  flex: 0 0 auto;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--text-dim);
+  background: transparent;
+  border: 0;
+  padding: 4px 6px;
+  cursor: pointer;
+}
+.reading__start-clear:hover { color: var(--text); }
+
+.reading__restore {
+  flex: 0 0 auto;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--text-dim);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  padding: 4px 4px 4px 8px;
+}
+.reading__restore:hover { color: var(--text); }
+
+.reading__time {
+  flex: 0 0 auto;
+  font-size: 12px;
+  color: var(--text-dim);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  /* 日期比原先的 'HH:MM' 长一倍：不许从中间折行，宁可挤文字也不掰开日期 */
+  white-space: nowrap;
+}
+.reading__arrow { opacity: .6; }
+.reading__done-at { color: var(--text); }
+
+.reading__del {
+  flex: 0 0 auto;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--text-dim);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  padding: 4px 8px;
+  opacity: 0;
+}
+.reading__item:hover .reading__del { opacity: 1; }
+.reading__del:hover { color: var(--text); }
+@media (hover: none) {
+  .reading__del { opacity: .6; }
+}
+
+.reading__subtitle {
+  margin: 0;
+  padding: 6px 12px;
+  font-size: 13px;
+  color: var(--text-dim);
+  border-top: 1px solid var(--border);
+}
+.reading__done-count { margin-left: 6px; font-size: 12px; }
+
+/* ---------------------------------------------------------------------------
    时间视图（见 DS 2.13）：按时段分组的当天任务
    网页版两列网格（4 组即 2×2），≤600px 单列 —— 和四象限同一个断点
    --------------------------------------------------------------------------- */
@@ -868,7 +1352,14 @@ body.is-dragging .block { cursor: grabbing; }
   color: var(--text-dim);
 }
 
-.timeview__list { list-style: none; margin: 0; padding: 4px 12px; }
+.timeview__list {
+  list-style: none;
+  margin: 0;
+  padding: 4px 12px;
+  /* 需求 5：时间视图每一块设最大高度，超过后右侧滚动 */
+  max-height: 60vh;
+  overflow-y: auto;
+}
 
 /* 条目复用象限的类名（v1.2 起可操作，见 DS 2.13）：
    任务条目内部走 .task__row 的 flex（和象限同一个布局），li 自己不排；
@@ -876,6 +1367,9 @@ body.is-dragging .block { cursor: grabbing; }
 .timeview__item {
   font-size: 14px;
   color: var(--text);
+  /* 时间视图也可拖拽（需求 3）：cursor 提示；触摸拖动把手是勾选框
+     （需求 7 / D-48），行本体不设 touch-action，保留正常滚动 */
+  cursor: grab;
 }
 .timeview__item.task { display: block; }
 .timeview__item.task .task__row { padding: 5px 0; }
@@ -886,6 +1380,12 @@ body.is-dragging .block { cursor: grabbing; }
   padding: 5px 0;
 }
 .timeview__text { min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* 需求 4：按象限给时间视图条目加一层浅浅的底色，一眼分辨一/二/三/四象限 */
+.timeview__item[data-quadrant="I"]   { background: color-mix(in srgb, var(--q1) 9%, var(--surface)); }
+.timeview__item[data-quadrant="II"]  { background: color-mix(in srgb, var(--q2) 9%, var(--surface)); }
+.timeview__item[data-quadrant="III"] { background: color-mix(in srgb, var(--q3) 9%, var(--surface)); }
+.timeview__item[data-quadrant="IV"]  { background: color-mix(in srgb, var(--q4) 9%, var(--surface)); }
 
 /* 阶段条目的所属任务标注：时间视图里看不到任务树，得说清它是谁的 */
 .timeview__parent {
@@ -921,6 +1421,8 @@ body.is-dragging .block { cursor: grabbing; }
    --------------------------------------------------------------------------- */
 .task--editing .task__row,
 .block--editing .task__row,
+.pool__block--editing .task__row,
+.reading__item--editing .task__row,
 .stage--editing { padding: 4px 8px; }
 
 .task__input,
@@ -953,22 +1455,44 @@ body.is-readonly .quadrant__add-block { opacity: .3; }
 body.is-readonly .task__check,
 body.is-readonly .task__del,
 body.is-readonly .task__postpone,
+body.is-readonly .task__bonus,
+body.is-readonly .stage__bonus,
 body.is-readonly .stage__postpone,
 body.is-readonly .block__check,
 body.is-readonly .block__del,
+body.is-readonly .block__postpone,
 body.is-readonly .pool__del,
 body.is-readonly .pool__add,
+body.is-readonly .pool__add-block,
 body.is-readonly .pool__date,
 body.is-readonly .pool__date-clear,
+body.is-readonly .pool__block-toggle,
+body.is-readonly .pool__block-add,
+body.is-readonly .pool__block-del,
+body.is-readonly .pool__check,
+body.is-readonly .pool__block-check,
+body.is-readonly .pool__import,
+body.is-readonly .pool__block-import,
 body.is-readonly .tpl__save,
 body.is-readonly .tpl__apply,
 body.is-readonly .tpl__rename,
 body.is-readonly .tpl__del,
+body.is-readonly .reading__add,
+body.is-readonly .reading__check,
+body.is-readonly .reading__start,
+body.is-readonly .reading__start-clear,
+body.is-readonly .reading__restore,
+body.is-readonly .reading__del,
 body.is-readonly .slot__select { pointer-events: none; opacity: .3; }
 /* 点文字进编辑也得挡住：保护模式下允许编辑就等于允许覆盖原始数据 */
 body.is-readonly .task__text,
 body.is-readonly .block__name,
-body.is-readonly .pool__text { pointer-events: none; }
+body.is-readonly .pool__text,
+body.is-readonly .pool__block-name,
+body.is-readonly .reading__text { pointer-events: none; }
+
+/* 收起 / 展开是纯界面动作，不属于「改数据」，保护模式下照常能点 ——
+   所以 .panel__toggle 故意不在这张名单里（见 DS 2.38） */
 
 /* ---------------------------------------------------------------------------
    下拉菜单（导出格式）
@@ -1079,6 +1603,41 @@ body.is-readonly .pool__text { pointer-events: none; }
 .toast--warn { background: var(--q3); color: #3a2f00; }
 
 /* ---------------------------------------------------------------------------
+   高亮（requirements 最新一条：连续双击给整条加高亮，见 DS 2.40）
+   --------------------------------------------------------------------------- */
+
+/*
+ * 「完全覆盖字体的高度」（requirements 原话）：底色画在**文字那个 span** 上，
+ * 不是画在整行 li 上 —— 行 li 有 padding，底色会漫成一条色带，
+ * 而用户想看到的是「这段字被荧光笔划了」。
+ *
+ * span 是 inline，背景高度按行盒算（line-height 1.6 × 字号），字形的实际
+ * 高度只有 1em 左右，所以底色必然盖满整个字高、上下还多出一点边。
+ *
+ * padding 配一对等量负 margin：底色左右各多出 3px（不贴字），而元素占位不变，
+ * 所以加 / 取消高亮时旁边的控件一个都不动。
+ *
+ * 完成后自动失效（FS「任务完成后高亮自动失效」）用 :not(--done) 表达 ——
+ * 高亮是标在「还没做完的东西」上的记号，做完了本来就划线变淡，再压一层橙底
+ * 反而看不清划线。**数据里的 highlight 不动**：取消勾选后高亮自己回来，
+ * 不用用户重新标一遍。
+ *
+ * 文字颜色在这里**定死**成 --hl-text，不跟 --text 走：底色是浅的，暗色主题下
+ * --text 是浅灰，压在浅橙上根本看不清（见 FS 验收「暗色模式下文字清晰可读」）。
+ */
+.task--highlight:not(.task--done) .task__text,
+.stage--highlight:not(.stage--done) .stage__text,
+.block--highlight:not(.block--done) .block__name,
+.pool__item--highlight:not(.pool__item--done) .pool__text,
+.pool__block--highlight:not(.pool__block--done) .pool__block-name {
+  background: var(--hl-bg);
+  color: var(--hl-text);
+  padding: 0 3px;
+  margin: 0 -3px;
+  border-radius: 3px;
+}
+
+/* ---------------------------------------------------------------------------
    打印（见 DS 4.4）
    --------------------------------------------------------------------------- */
 
@@ -1105,6 +1664,8 @@ body.is-readonly .pool__text { pointer-events: none; }
 
   .print__day { margin-top: 14pt; }
   .print__date { font-size: 14pt; margin: 0 0 8pt; border-bottom: 1pt solid #000; }
+  /* 日期下那行当日统计（需求 1，见 pdf.js buildPrintHtml） */
+  .print__stats { font-size: 10pt; color: #555; margin: 0 0 8pt; }
 
   /* 象限去掉彩色底、改用边框：省墨水，黑白打印也能分得清 */
   .print__quad {
@@ -1150,4 +1711,52 @@ body.is-readonly .pool__text { pointer-events: none; }
   }
 
   .quadrant__body { max-height: 40vh; }
+
+  /* 手机端排版（v2.10 需求 4 + v2.11 需求 1/2，见 DS 2.44 / 2.46）：
+     一行放不下就折行 —— 文字紧挨着勾选框、在第一行占满剩余宽度并自动换行
+     完整显示，右侧那一串操作按钮**整组**折到第二行、靠右对齐，左侧留空。
+
+     关键在把文字格的 flex-basis 从 0% 换成 auto：折不折行是**按每个格子
+     的实际宽度**算的（basis 为 0 时所有格子都「不占地方」，永远折不了行）。
+     于是只有「勾选框 + 整段文字 + 按钮」真挤不进一行时才折行 —— 文字短的行
+     照旧是一行，不会平白多出一条空白。flex-grow: 1 保证无论折没折行，
+     第一行都被文字占满（需求 4.2）。 */
+  .task__row,
+  .stage,
+  .block__head,
+  .pool__block-head {
+    flex-wrap: wrap;
+  }
+
+  .task__text,
+  .stage__text,
+  .pool__text,
+  .block__name,
+  .pool__block-name {
+    flex: 1 1 auto;
+    min-width: 0;
+    /* v2.11 需求 1：basis = auto 时文字格的「假设宽度」就是**整段文字的
+       宽度**，长文算出来比一行还宽，于是连文字一起被挤到第二行 —— 第一行
+       只剩一个勾选框，右侧空一大片。给它夹一个上限（一行减去勾选框和间距
+       的约 32px）就把文字按回第一行：它在勾选框右边占满剩余宽度、自己换行，
+       正是需求说的「把勾选框右侧的空间也利用上」。
+       上限留出的余量（约 11px）必须**小于**折下来第一个控件的最小宽度
+       （最窄的完成度「0/1」也要 20px 上下），否则它会被塞进第一行，
+       把「整组折行」拆成两半。 */
+    max-width: calc(100% - 32px);
+    overflow-wrap: anywhere;
+  }
+
+  /* v2.11 需求 2：右侧那一串控件是一个**整体** —— 放不下时整组折到下一行，
+     不会只折一半（上一版按单个控件折，会被拆开）。margin-left: auto 吃掉
+     本行剩余空间：留在第一行时贴最右，折到第二行时同样贴最右、左侧留空。 */
+  .task__actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    margin-left: auto;
+  }
+  /* 组内间距跟着所在行容器的间距走：任务行是 8px，其余三类是 6px */
+  .task__row > .task__actions { gap: 8px; }
 }

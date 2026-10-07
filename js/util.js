@@ -94,6 +94,44 @@ var Util = (function () {
   }
 
   // ---------------------------------------------------------------------------
+  // 阅读栏的时间戳（v2.8 需求 2）
+  //
+  // **记的是日期，不是几点几分**：需求「阅读板块的时间指的是日期」。起始日期
+  // 默认今天，读完时自动记下今天 —— 读书这件事按天记就够了，记到分钟既没人填
+  // 也不好看（v2.8 初版按时分做过，已按反馈改掉，见 DS 2.37 修订）。
+  // 日期一律走**本地时区**，不用 toISOString（那会在东八区差一天）。
+  // ---------------------------------------------------------------------------
+
+  /**
+   * 阅读栏的时间戳合不合法：'YYYY-MM-DD' 合法，**老的 'HH:MM' 也收**。
+   *
+   * 后半句是兼容，不是功能：v2.8 初版存的是时分，用户手里可能已经有那样的
+   * JSON。清洗和导入走这个宽松版（把老值当脏数据抹掉 = 用户记的东西真没了），
+   * **写操作走严格版** `isValidDateStr` —— 新写入的一律是日期。
+   */
+  function isValidReadingStamp(s) {
+    return isValidDateStr(s) || isValidTimeStr(s);
+  }
+
+  var TIME_RE = /^([0-9]{2}):([0-9]{2})$/;
+
+  /**
+   * 是不是一个合法的 'HH:MM'（00:00 ~ 23:59）。空串不算合法。
+   *
+   * v2.8 起**只有**阅读栏的兼容分支还在用它（读老数据），新代码不要再用。
+   * 配套的 `formatTime` / `nowTimeStr`（Date → 'HH:MM'）已经删掉了：口径改成
+   * 日期之后一个调用点都不剩，留着只会让人以为阅读栏还能记到分钟。
+   */
+  function isValidTimeStr(s) {
+    if (typeof s !== 'string') return false;
+    var m = TIME_RE.exec(s);
+    if (!m) return false;
+    var hh = Number(m[1]);
+    var mm = Number(m[2]);
+    return hh >= 0 && hh <= 23 && mm >= 0 && mm <= 59;
+  }
+
+  // ---------------------------------------------------------------------------
   // 唯一编号
   // ---------------------------------------------------------------------------
 
@@ -160,6 +198,8 @@ var Util = (function () {
     todayStr: todayStr,
     diffDays: diffDays,
     compareDateStr: compareDateStr,
+    isValidReadingStamp: isValidReadingStamp,
+    isValidTimeStr: isValidTimeStr,
     genId: genId,
     cleanText: cleanText,
     isValidTaskText: isValidTaskText,

@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="color-scheme" content="light dark">
-  <title>四象限任务管理</title>
+  <title>MyPal</title>
   <link rel="stylesheet" href="css/style.css">
 
   <!--
@@ -54,6 +54,10 @@
     </div>
 
     <div class="topbar__actions">
+      <!-- 搜索（需求 3）：右上角入口，点开输入框后实时过滤象限 / 时间视图 -->
+      <input type="search" id="search-input" class="search-input"
+             placeholder="搜索任务…" aria-label="搜索任务" hidden>
+      <button type="button" id="btn-search" class="btn btn--icon" aria-label="搜索任务">🔍</button>
       <button type="button" id="btn-theme" class="btn btn--icon" aria-label="切换主题">◐</button>
       <button type="button" id="btn-import" class="btn btn--ghost">导入</button>
 
@@ -65,7 +69,7 @@
             JSON<small>唯一能再导入回来的格式</small>
           </button>
           <button type="button" class="menu__item" data-format="md">
-            Markdown<small>按日期排好的文本</small>
+            Markdown<small>当前查看那一天的日报</small>
           </button>
           <button type="button" class="menu__item" data-format="zip">
             ZIP<small>JSON + Markdown 打包</small>
@@ -83,14 +87,26 @@
   <!-- 选文件用的，藏起来由「导入」按钮触发 -->
   <input type="file" id="file-input" accept=".json,application/json" hidden>
 
+  <!--
+    阅读栏（v2.8 需求 2）：正在阅读 + 已读完成，放在四象限**上面**（需求定的），
+    可收起。两个视图都显示 —— 它跟日期、象限都无关，藏起来就没法点「完成」了
+  -->
+  <section id="reading" class="reading"></section>
+
   <!-- 四象限 -->
   <main id="quadrants" class="quadrants"></main>
 
-  <!-- 计划池：推迟进来的任务在这里等安排，跟日期无关（见 DS 2.11） -->
-  <section id="pool" class="pool"></section>
-
+  <!--
+    时间视图排在这里、计划池排它后面（v2.8 需求 1）。
+    切到时间视图时计划池也要在**下面**，两模式下计划池都在页面底部；
+    象限模式下 #timeview 是 hidden、没有布局盒子，所以这个顺序对
+    象限视图的观感没有任何影响（见 DS 2.36）。
+  -->
   <!-- 时间视图：按完成时段分组的当天任务（见 DS 2.13），默认藏着 -->
   <section id="timeview" class="timeview" hidden></section>
+
+  <!-- 计划池：推迟进来的任务在这里等安排，跟日期无关（见 DS 2.11） -->
+  <section id="pool" class="pool"></section>
 
   <!-- 模板：把某一天的四象限存成能反复用的底稿（见 DS 2.14） -->
   <section id="templates" class="templates"></section>

@@ -25,7 +25,8 @@ function local(spec) {
   for (var i = 0; i < quadrants.length; i++) {
     var parts = quadrants[i].split('|');   // 写成 '2026-10-01|I'
     var texts = spec[quadrants[i]];
-    for (var k = 0; k < texts.length; k++) {
+    // addTask 默认把新任务加在开头（需求 3），倒着加才能让最终顺序和 spec 一致
+    for (var k = texts.length - 1; k >= 0; k--) {
       TaskOps.addTask(data, parts[0], parts[1], texts[k]);
     }
   }
@@ -419,6 +420,72 @@ t('判重限同象限：本地同名任务在别的象限时，块照常进来',
 
   h.assertEqual(result.added, 1, '块落在 I，本地那条在 II，不算重复');
   h.assertEqual(data.dates['2026-10-01'].I.length, 1);
+});
+
+// ---------------------------------------------------------------------------
+h.group('覆盖导入（需求 2）：整体替换，返回新数据对象');
+
+t('覆盖后本地只剩文件里的内容，本地独有的全清掉', function () {
+  var data = local({ '2026-10-01|I': ['本地甲'], '2026-10-01|II': ['本地乙'] });
+  var imported = Importer.validate(file({ '2026-10-01|I': ['文件丙'] })).data;
+
+  var result = Importer.overwrite(data, imported);
+
+  h.assertEqual(result.added, 1);
+  h.assertEqual(result.skipped, 0, '空本地没有可跳过的');
+  h.assertEqual(texts(result.data, '2026-10-01', 'I'), '文件丙');
+  h.assertEqual(texts(result.data, '2026-10-01', 'II'), '', '本地独有的乙被清掉了');
+});
+
+t('覆盖返回的是新数据对象，不是原来的那一个', function () {
+  var data = local({ '2026-10-01|I': ['本地甲'] });
+  var imported = Importer.validate(file({ '2026-10-01|I': ['文件丙'] })).data;
+
+  var result = Importer.overwrite(data, imported);
+
+  h.assertFalse(result.data === data, '覆盖不该在原地改，调用方要接回新引用');
+  h.assertEqual(texts(data, '2026-10-01', 'I'), '本地甲', '原对象本身不该被改动');
+});
+
+t('覆盖后 id 全换新，不沿用文件里的编号', function () {
+  var data = local();
+  var imported = Importer.validate(file({ '2026-10-01|I': ['文件丙'] })).data;
+  var srcId = imported.dates['2026-10-01'].I[0].id;
+
+  var result = Importer.overwrite(data, imported);
+
+  h.assertFalse(result.data.dates['2026-10-01'].I[0].id === srcId);
+});
+
+t('覆盖保留 user 和 schemaVersion', function () {
+  var data = local();
+  var imported = Importer.validate(file({ '2026-10-01|I': ['文件丙'] })).data;
+
+  var result = Importer.overwrite(data, imported);
+
+  h.assertEqual(result.data.user, 'default');
+  h.assertEqual(result.data.schemaVersion, 1);
+});
+
+t('覆盖和合并一样忽略 tv（时间视图顺序记忆是设备本地的）', function () {
+  var data = local();
+  var raw = JSON.parse(file({ '2026-10-01|I': ['文件丙'] }));
+  raw.dates['2026-10-01'].tv = { '早上': ['t:x'] };
+  var imported = Importer.validate(JSON.stringify(raw)).data;
+
+  var result = Importer.overwrite(data, imported);
+
+  h.assertEqual(result.data.dates['2026-10-01'].tv, undefined);
+});
+
+t('同一份文件覆盖两次，结果一致，不叠加', function () {
+  var data = local({ '2026-10-01|I': ['甲'] });
+  var imported = Importer.validate(file({ '2026-10-01|I': ['丙', '丁'] })).data;
+
+  var r1 = Importer.overwrite(data, imported);
+  var r2 = Importer.overwrite(r1.data, imported);
+
+  h.assertEqual(texts(r2.data, '2026-10-01', 'I'), '丙,丁', '两次覆盖结果一致，不叠加');
 });
 
 // ---------------------------------------------------------------------------

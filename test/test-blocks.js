@@ -255,14 +255,14 @@ t('块里文本为空的任务被丢掉，剩下的保留', function () {
 // ---------------------------------------------------------------------------
 h.group('块的增删改（task-ops）');
 
-t('新建块：加在象限顶层末尾，是个空块', function () {
+t('新建块：加在象限顶层开头，是个空块（需求 3）', function () {
   var data = fresh();
   add(data, 'I', '已有任务');
   var block = addBlk(data, 'I', '新块');
 
   var list = Store.getDayTasks(data, DATE).I;
   h.assertEqual(list.length, 2);
-  h.assertEqual(list[1].id, block.id, '块排最后');
+  h.assertEqual(list[0].id, block.id, '块排最前');
   h.assertEqual(block.tasks.length, 0);
   h.assertEqual(block.completed, false);
 });
@@ -534,15 +534,16 @@ t('moveItem：顶层任务换位，块和任务互不干扰', function () {
   add(data, 'I', '甲');
   var block = addBlk(data, 'I', '块');
   putInBlock(block, '块内的');
-  add(data, 'I', '乙');
+  var yi = add(data, 'I', '乙');
+  // 新任务默认加在开头（需求 3）：此时顶层顺序是 乙,【块】,甲
 
-  // 把「乙」挪到最前
+  // 把「乙」从最前挪到最后
   h.assertTrue(TaskOps.moveItem(data, DATE, {
-    kind: 'task', id: itemAt(data, 'I', 2).id,
-    toQuadrantId: 'I', toBlockId: null, toIndex: 0
+    kind: 'task', id: yi,
+    toQuadrantId: 'I', toBlockId: null, toIndex: 2
   }).ok);
 
-  h.assertEqual(orderOf(data, 'I'), '乙,甲,【块】');
+  h.assertEqual(orderOf(data, 'I'), '【块】,甲,乙');
   h.assertEqual(block.tasks.length, 1, '块里的不受影响');
 });
 
@@ -644,13 +645,14 @@ t('moveItem：同象限内块换位置', function () {
   add(data, 'I', '任务一');
   var block = addBlk(data, 'I', '块');
   add(data, 'I', '任务二');
+  // 新任务默认加在开头（需求 3）：此时顶层顺序是 任务二,【块】,任务一
 
   h.assertTrue(TaskOps.moveItem(data, DATE, {
     kind: 'block', id: block.id,
     toQuadrantId: 'I', toBlockId: null, toIndex: 2
   }).ok);
 
-  h.assertEqual(orderOf(data, 'I'), '任务一,任务二,【块】');
+  h.assertEqual(orderOf(data, 'I'), '任务二,任务一,【块】');
 });
 
 t('块内任务 moveTask 到本象限顶层：插到指定位置', function () {
@@ -659,11 +661,11 @@ t('块内任务 moveTask 到本象限顶层：插到指定位置', function () {
   var a = putInBlock(block, '从块里出来的');
   add(data, 'I', '顶一');
   add(data, 'I', '顶二');
-  // 此时顶层顺序：【块】, 顶一, 顶二
+  // 新任务默认加在开头（需求 3）：此时顶层顺序是 顶二,顶一,【块】
 
   h.assertTrue(TaskOps.moveTask(data, DATE, a.id, 'I', 1).ok);
 
-  h.assertEqual(orderOf(data, 'I'), '【块】,从块里出来的,顶一,顶二');
+  h.assertEqual(orderOf(data, 'I'), '顶二,从块里出来的,顶一,【块】');
   h.assertEqual(block.tasks.length, 0);
 });
 

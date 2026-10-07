@@ -74,19 +74,30 @@ var Render = (function (CONFIG, Util) {
     }
 
     return '' +
-      '<li class="stage' + (stage.completed ? ' stage--done' : '') + '"' +
+      '<li class="stage' + (stage.completed ? ' stage--done' : '') +
+        // 高亮（requirements 最新一条，见 DS 2.40）：加在整条上，底色画在
+        // .stage__text 那段文字上；完成后自动失效交给 CSS（.stage--done 排除）
+        (stage.highlight === true ? ' stage--highlight' : '') + '"' +
         ' data-id="' + Util.escapeHtml(stage.id) + '">' +
         '<input type="checkbox" class="stage__check"' +
           (stage.completed ? ' checked' : '') +
           ' aria-label="标记阶段完成">' +
         '<span class="stage__text">' + Util.escapeHtml(stage.text) + '</span>' +
+        // v2.11 需求 1/2（见 DS 2.46）：文字右边这串控件收进一个组 ——
+        // 手机端装不下时**整组**折到下一行（不会只折一半），且靠右对齐、左侧留空
+        '<span class="task__actions">' +
         // 时段挂在各阶段身上（DS 2.12）：有阶段的任务，安排到哪一段由各阶段决定
         buildSlotSelectHtml(stage.slot || null) +
+        // Bonus（需求 2）：阶段可单独标记，图标礼品
+        '<button type="button" class="stage__bonus' +
+          (stage.bonus === true ? ' bonus--on' : '') + '"' +
+          ' title="设为 Bonus" aria-label="设为 Bonus">🎁</button>' +
         // 阶段也是推迟对象（requirements 第 3 条）：推迟时保存为池内任务，
         // 文本前加 [所属任务] 前缀（见 DS 2.11 postponeStage）
         '<button type="button" class="stage__postpone"' +
           ' title="推迟到计划池" aria-label="推迟到计划池">推迟</button>' +
         '<button type="button" class="stage__del" aria-label="删除阶段">×</button>' +
+        '</span>' +
       '</li>';
   }
 
@@ -174,17 +185,23 @@ var Render = (function (CONFIG, Util) {
           (progress.isComplete ? ' checked' : '') +
           ' aria-label="全部勾选或取消块内任务">' +
         '<span class="block__name">' + Util.escapeHtml(block.text) + '</span>' +
+        // v2.11 需求 1/2（见 DS 2.46）：右侧这串控件收进一个组
+        '<span class="task__actions">' +
         '<span class="task__progress' + (progress.isComplete ? ' task__progress--done' : '') + '">' +
           progress.done + '/' + progress.total + '</span>' +
         '<button type="button" class="block__toggle" aria-expanded="' + (!isCollapsed) +
           '" aria-label="展开或收起任务块">' + (isCollapsed ? '▸' : '▾') + '</button>' +
+        '<button type="button" class="block__postpone" title="整体推迟到计划池"' +
+          ' aria-label="整体推迟到计划池">推迟</button>' +
         '<button type="button" class="block__del" aria-label="删除任务块">×</button>' +
+        '</span>' +
       '</div>';
 
     var body = '';
     if (!isCollapsed) {
-      // 块内任务多带一个 inBlock 标记：「推迟」按钮只给顶层任务，
-      // 块内任务没有（要推迟先把它拖出块，见 DS 2.11 界面）
+      // 块内任务多带一个 inBlock 标记：块内**拆了阶段**的任务不给整条「推迟」
+      // 按钮（整条推会把阶段一起卷走，靠逐个阶段推迟）；没拆阶段的照给
+      // （v2.3 需求 2 / D-54，条件在 buildTaskHtml 里）
       var childView = {};
       for (var vk in view) childView[vk] = view[vk];
       childView.inBlock = true;
@@ -202,6 +219,8 @@ var Render = (function (CONFIG, Util) {
 
     return '' +
       '<li class="block' + (progress.isComplete ? ' block--done' : '') +
+        // 高亮（见 DS 2.40）：画在块名上 —— 块是容器，标的是块头那行字
+        (block.highlight === true ? ' block--highlight' : '') +
         '" data-id="' + id + '">' + head + body + '</li>';
   }
 
@@ -239,7 +258,10 @@ var Render = (function (CONFIG, Util) {
           // 有阶段时它是个「全选 / 全不选」的开关，标签要说清楚，
           // 否则屏幕阅读器只会念一句「标记完成」，用户以为是勾这一条
           ' aria-label="' + (stages.length ? '全部勾选或取消' : '标记完成') + '">' +
-        '<span class="task__text">' + Util.escapeHtml(task.text) + '</span>';
+        '<span class="task__text">' + Util.escapeHtml(task.text) + '</span>' +
+        // v2.11 需求 1/2（见 DS 2.46）：右侧这串控件收进一个组 ——
+        // 手机端装不下时**整组**折到下一行（不会只折一半），且靠右对齐、左侧留空
+        '<span class="task__actions">';
 
     // 进度只在有阶段时显示 —— 没阶段的任务显示「0/1」是废话
     if (progress.hasStages) {
@@ -261,6 +283,10 @@ var Render = (function (CONFIG, Util) {
     // 否则同一件事出现两个时段，时间视图不知道听谁的
     if (!stages.length) {
       row += buildSlotSelectHtml(task.slot || null);
+      // Bonus（需求 2）：也只给没有阶段的任务本体（有阶段时由各阶段分别标）
+      row += '<button type="button" class="task__bonus' +
+        (task.bonus === true ? ' bonus--on' : '') + '"' +
+        ' title="设为 Bonus" aria-label="设为 Bonus">🎁</button>';
     }
 
     // 添加阶段的小按钮，永远在任务右上角（见 DS 2.9）。
@@ -269,17 +295,23 @@ var Render = (function (CONFIG, Util) {
         '<button type="button" class="task__add-stage"' +
           ' title="添加阶段" aria-label="添加阶段">＋</button>';
 
-    // 「推迟」按钮（DS 2.11）：只有**顶层任务**有 —— view.inBlock 由
-    // buildBlockHtml 传进来，块内任务没有；要推迟先把它拖出块
-    if (!view.inBlock) {
+    // 「推迟」按钮（DS 2.11）：顶层任务都有；块内任务里**没拆阶段**的也有
+    //（requirements 第 2 条：任务块中没划分阶段的任务要支持推迟）。
+    // 有阶段的块内任务整条推迟会把阶段一起卷走，仍走「逐个阶段推迟」——
+    // view.inBlock 由 buildBlockHtml 传进来，没传 = 顶层任务。
+    if (!view.inBlock || !stages.length) {
       row += '<button type="button" class="task__postpone"' +
         ' title="推迟到计划池" aria-label="推迟到计划池">推迟</button>';
     }
 
     row += '<button type="button" class="task__del" aria-label="删除任务">×</button>' +
+      '</span>' +
       '</div>';
 
+    // 高亮（requirements 最新一条，见 DS 2.40）：带阶段的任务本体也能标黄 ——
+    // 双击的是任务行那段文字，和下面各阶段的高亮互不影响
     var html = '<li class="task' + (progress.isComplete ? ' task--done' : '') +
+      (task.highlight === true ? ' task--highlight' : '') +
       '" data-id="' + id + '">' + row;
 
     // 展开时才挂阶段列表。没阶段、又不是「正在加阶段」的任务，
@@ -313,11 +345,11 @@ var Render = (function (CONFIG, Util) {
    * @param {Object} [view] 这一天的界面状态：
    *        editing    { quadrantId, mode, taskId, stageId, itemId }
    *                   mode 有六种：
-   *                     'add'         在末尾挂一个新增任务的输入框
+   *                     'add'         在开头挂一个新增任务的输入框
    *                     'edit-task'   把某条任务换成输入框
    *                     'add-stage'   给某条任务挂一个新增阶段的输入框
    *                     'edit-stage'  把某个阶段换成输入框
-   *                     'add-block'   在末尾挂一个新增任务块的输入框（v1.1）
+   *                     'add-block'   在开头挂一个新增任务块的输入框（v1.1）
    *                     'edit-block'  把某个块收成改名输入框（v1.1）
    *        expanded   { 任务id: true } 哪些任务是展开的
    *        collapsedBlocks { 块id: true } 哪些块是收起的（块默认展开，见 D-36）
@@ -363,8 +395,12 @@ var Render = (function (CONFIG, Util) {
       unitTotal += progress.total;
     }
 
-    if (here && here.mode === 'add') items += buildNewTaskHtml();
-    if (here && here.mode === 'add-block') items += buildNewBlockHtml();
+    // 需求（重命名后 3）：新增任务的输入框挂在**开头**，和「新任务加到开头」
+    // 的数据位置对齐 —— 用户在哪敲，任务就落在哪，不会出现「在底部敲、跑到顶部」。
+    var newItemHtml = '';
+    if (here && here.mode === 'add') newItemHtml = buildNewTaskHtml();
+    else if (here && here.mode === 'add-block') newItemHtml = buildNewBlockHtml();
+    items = newItemHtml + items;
 
     // 空的象限不显示「0/0」，那是一句废话 —— 底下那句「暂无任务」已经说清楚了
     var countText = unitTotal ? (unitDone + '/' + unitTotal) : '';
@@ -420,9 +456,12 @@ var Render = (function (CONFIG, Util) {
   /**
    * 计划池里的一条（见 DS 2.11）。
    *
-   * 池里是「待安排」的事，不是「正在做」的事：**没有勾选框** —— 显示勾选框
-   * 会诱导用户在池里勾任务，而池内任务的完成状态只是进池前的历史遗留，
-   * 进池后不再推进。一期池内也不展开阶段，行上只有文字和删除。
+   * v2.7 需求 1 之前这里**没有勾选框**（理由是「池里是待安排的事，勾选会诱导
+   * 用户推进它」）；该需求明确要求池内块和象限块同格式同功能，所以勾选框
+   * 加回来了 —— 勾完只划掉变淡、沉到所在列表末尾，**不移出池**（要移出仍靠
+   * 「导入」或拖回），也就是把「勾选」和「移出池」两件事分开。
+   *
+   * 池内仍不展开阶段（D-61）：行上是勾选框 + 文字 + 完成时间 + 导入 + 删除。
    */
   function buildPoolItemHtml(task, editing) {
     var id = Util.escapeHtml(task.id);
@@ -458,14 +497,129 @@ var Render = (function (CONFIG, Util) {
       : '<button type="button" class="pool__date pool__date--empty" title="设定完成时间"' +
         ' aria-label="设定完成时间">未设定</button>';
 
+    // 勾选状态读 completed：有阶段时它是派生值（以阶段为准，store.normalize
+    // 和每次阶段改动都会同步），没阶段时就是用户自己勾的那个
+    var checked = !!task.completed;
+
     return '' +
-      '<li class="pool__item" data-id="' + id + '">' +
+      '<li class="pool__item' + (checked ? ' pool__item--done' : '') +
+        // 高亮（见 DS 2.40）：从象限推迟进来的任务带着 highlight，池里照画
+        (task.highlight === true ? ' pool__item--highlight' : '') +
+        '" data-id="' + id + '">' +
         '<div class="task__row">' +
+          '<input type="checkbox" class="pool__check"' + (checked ? ' checked' : '') +
+            ' aria-label="标记完成">' +
           '<span class="pool__text">' + Util.escapeHtml(task.text) + '</span>' +
+          // v2.11 需求 1/2（见 DS 2.46）：右侧这串控件收进一个组
+          '<span class="task__actions">' +
           dateHtml +
+          // v2.6 需求 2：把这条（含全部阶段）导入当前查看日期的第二象限。
+          // 是**移动**不是复制 —— 池里不再保留（见 DS 2.31）
+          '<button type="button" class="pool__import" title="导入到第二象限"' +
+            ' aria-label="导入到第二象限">导入</button>' +
           '<button type="button" class="pool__del" aria-label="从计划池删除">×</button>' +
+          '</span>' +
         '</div>' +
       '</li>';
+  }
+
+  /**
+   * 计划池里的一个任务块（需求 4；v2.7 起和象限块同格式同功能）。
+   *
+   * 块头 = 勾选框（一键全勾 / 全取消）+ 块名（点击改名）+ 完成度 n/m +
+   * 折叠三角 + 动作按钮（池内是「导入」，象限里是「推迟」—— 池本来就是
+   * 推迟的目的地，见 D-61）。体是块内任务列表（复用 buildPoolItemHtml，
+   * DDL 逐条挂在任务行上）。
+   *
+   * 完成度走 view.progressOf（app.js 传的就是 TaskOps.progressOfItem），
+   * 和象限块头、顶部统计同一个算法 —— 别在这里另算一套。
+   */
+  function buildPoolBlockHtml(block, view) {
+    view = view || {};
+    var editing = view.editing || null;
+    var collapsed = view.collapsedBlocks || {};
+    var progressOf = view.progressOf || fallbackProgress;
+    var id = Util.escapeHtml(block.id);
+    var isCollapsed = !!collapsed[block.id];
+    var tasks = Array.isArray(block.tasks) ? block.tasks : [];
+
+    // 正在改块名：整条收成一个输入框（和象限改块名同一套交互，见 D-31）
+    if (editing && editing.mode === 'edit-pool-block' && editing.blockId === block.id) {
+      return '' +
+        '<li class="pool__block pool__block--editing" data-id="' + id + '">' +
+          '<div class="task__row">' +
+            '<input type="text" class="task__input" value="' + Util.escapeHtml(block.text) + '"' +
+              ' maxlength="500" aria-label="编辑任务块">' +
+          '</div>' +
+        '</li>';
+    }
+
+    var progress = progressOf(block);
+
+    var head = '' +
+      '<div class="pool__block-head">' +
+        '<input type="checkbox" class="pool__block-check"' +
+          (progress.isComplete ? ' checked' : '') +
+          ' aria-label="全部勾选或取消块内任务">' +
+        '<span class="pool__block-name">' + Util.escapeHtml(block.text) + '</span>' +
+        // v2.11 需求 1/2（见 DS 2.46）：右侧这串控件收进一个组
+        '<span class="task__actions">' +
+        // 完成度：池内块头也有 n/m，和象限块头同一个类名 / 同一个算法
+        '<span class="task__progress' + (progress.isComplete ? ' task__progress--done' : '') + '">' +
+          progress.done + '/' + progress.total + '</span>' +
+        '<button type="button" class="pool__block-toggle" aria-expanded="' + (!isCollapsed) +
+          '" aria-label="展开或收起任务块">' + (isCollapsed ? '▸' : '▾') + '</button>' +
+        // v2.6 需求 2：整块（含块内任务）一起导入第二象限，不拆散
+        '<button type="button" class="pool__block-import" title="整块导入到第二象限"' +
+          ' aria-label="整块导入到第二象限">导入</button>' +
+        '<button type="button" class="pool__block-add" title="在块里加任务"' +
+          ' aria-label="在块里加任务">＋</button>' +
+        '<button type="button" class="pool__block-del" aria-label="删除任务块">×</button>' +
+        '</span>' +
+      '</div>';
+
+    var body = '';
+    if (!isCollapsed) {
+      var rows = '';
+      for (var i = 0; i < tasks.length; i++) {
+        rows += buildPoolItemHtml(tasks[i], editing);
+      }
+
+      var isAdding = !!(editing && editing.mode === 'add-pool-block-task' &&
+                        editing.blockId === block.id);
+      if (isAdding) {
+        rows += '<li class="pool__item pool__item--editing">' +
+                  '<div class="task__row">' +
+                    '<input type="text" class="task__input" value="" maxlength="500"' +
+                      ' placeholder="输入任务内容，回车确认" aria-label="新块内任务">' +
+                  '</div>' +
+                '</li>';
+      }
+      if (!tasks.length && !isAdding) {
+        rows += '<li class="pool__block-empty">块是空的，点右上角「＋」加任务</li>';
+      }
+      body = '<ul class="pool__block-tasks">' + rows + '</ul>';
+    }
+
+    return '<li class="pool__block' + (progress.isComplete ? ' pool__block--done' : '') +
+      // 高亮（见 DS 2.40）：池内块和历史一样画在块名上
+      (block.highlight === true ? ' pool__block--highlight' : '') +
+      '" data-id="' + id + '">' + head + body + '</li>';
+  }
+
+  /**
+   * 板块收起的三角（v2.8 需求 3）：阅读栏 / 计划池 / 模板池共用。
+   *
+   * 收起状态本身不靠这个按钮记 —— 它由 app.js 存进本机（foldState 的
+   * collapsedPanels），渲染时通过 view.collapsedPanels 传进来，只用来把
+   * 三角的朝向和 aria-expanded 画对。所以这里没有任何状态。
+   */
+  function panelToggleHtml(panelId, view) {
+    var collapsed = !!(view && view.collapsedPanels && view.collapsedPanels[panelId]);
+    var label = collapsed ? '展开' : '收起';
+    return '<button type="button" class="panel__toggle" data-panel="' +
+      Util.escapeHtml(panelId) + '" aria-expanded="' + (collapsed ? 'false' : 'true') +
+      '" title="' + label + '面板" aria-label="' + label + '面板">▾</button>';
   }
 
   /**
@@ -477,13 +631,14 @@ var Render = (function (CONFIG, Util) {
     var editing = view.editing || null;
     var list = Array.isArray(items) ? items : [];
 
-    // 头部的「＋」是手动添加入口（三期）：点它在列表末尾长出输入框，
-    // 和象限加任务同一套交互（D-31）
-    var head = '<header class="pool__head">' +
+    // 头部三个入口：▾ 收起（v2.8 需求 3）、「＋」加任务（三期）、「▣」加任务块（需求 4）。
+    var head = '<header class="pool__head">' + panelToggleHtml('pool', view) +
       '<span class="pool__name">计划池</span>' +
       '<span class="pool__count">' + (list.length ? String(list.length) : '') + '</span>' +
       '<button type="button" class="pool__add"' +
         ' title="添加任务到计划池" aria-label="添加任务到计划池">＋</button>' +
+      '<button type="button" class="pool__add-block"' +
+        ' title="添加任务块到计划池" aria-label="添加任务块到计划池">▣</button>' +
       '</header>';
 
     // 正在添加：输入框挂在列表末尾（池空时没有列表，直接跟在提示后面）
@@ -497,17 +652,31 @@ var Render = (function (CONFIG, Util) {
         '</li>'
       : '';
 
+    var addingBlock = !!(editing && editing.mode === 'add-pool-block');
+    var addBlockRow = addingBlock
+      ? '<li class="pool__item pool__item--editing">' +
+          '<div class="task__row">' +
+            '<input type="text" class="task__input" value=""' +
+              ' maxlength="500" placeholder="输入任务块名称，回车确认" aria-label="新计划池任务块">' +
+          '</div>' +
+        '</li>'
+      : '';
+
     if (!list.length) {
       var empty = '<p class="pool__empty">计划池是空的。点任务行上的「推迟」，' +
-        '或点上面的「＋」，把暂时不做的事放进来。</p>';
-      return head + (adding ? '<ul class="pool__list">' + addRow + '</ul>' : empty);
+        '或点上面的「＋」「▣」，把暂时不做的事放进来。</p>';
+      return head + (adding || addingBlock
+        ? '<ul class="pool__list">' + addBlockRow + addRow + '</ul>'
+        : empty);
     }
 
     var rows = '';
     for (var i = 0; i < list.length; i++) {
-      rows += buildPoolItemHtml(list[i], editing);
+      rows += (list[i].type === 'block')
+        ? buildPoolBlockHtml(list[i], view)
+        : buildPoolItemHtml(list[i], editing);
     }
-    return head + '<ul class="pool__list">' + rows + addRow + '</ul>';
+    return head + '<ul class="pool__list">' + rows + addBlockRow + addRow + '</ul>';
   }
 
   /**
@@ -536,7 +705,7 @@ var Render = (function (CONFIG, Util) {
       var group = list[i];
       var icon = CONFIG.SLOT_ICONS[group.slot] || '';
 
-      html += '<section class="timeview__group">' +
+      html += '<section class="timeview__group" data-slot="' + Util.escapeHtml(group.slot) + '">' +
         '<h2 class="timeview__title">' + icon + ' ' + Util.escapeHtml(group.slot) +
           '<span class="timeview__count">' + group.items.length + '</span>' +
         '</h2>' +
@@ -582,13 +751,18 @@ var Render = (function (CONFIG, Util) {
       }
 
       return '<li class="timeview__item task' +
-          (item.completed ? ' task--done timeview__item--done' : '') + '"' + taskAttrs + '>' +
+          (item.completed ? ' task--done timeview__item--done' : '') +
+          (item.highlight === true ? ' task--highlight' : '') + '"' + taskAttrs + '>' +
         '<div class="task__row">' +
           '<input type="checkbox" class="task__check"' +
             (item.completed ? ' checked' : '') + ' aria-label="标记完成">' +
           '<span class="task__text timeview__text">' + Util.escapeHtml(item.text) + '</span>' +
+          // v2.11 需求 1/2（见 DS 2.46）：右侧这串控件收进一个组
+          '<span class="task__actions">' +
+          (item.bonus ? '<span class="bonus__mark" title="Bonus">🎁</span>' : '') +
           buildSlotSelectHtml(slot) +
           '<button type="button" class="task__del" aria-label="删除任务">×</button>' +
+          '</span>' +
         '</div>' +
       '</li>';
     }
@@ -609,7 +783,8 @@ var Render = (function (CONFIG, Util) {
     }
 
     return '<li class="timeview__item stage' +
-        (item.completed ? ' stage--done timeview__item--done' : '') + '"' + stageAttrs + '>' +
+        (item.completed ? ' stage--done timeview__item--done' : '') +
+        (item.highlight === true ? ' stage--highlight' : '') + '"' + stageAttrs + '>' +
       '<input type="checkbox" class="stage__check"' +
         (item.completed ? ' checked' : '') + ' aria-label="标记阶段完成">' +
       '<span class="stage__text timeview__text">' + Util.escapeHtml(item.text) +
@@ -617,8 +792,12 @@ var Render = (function (CONFIG, Util) {
           ? ' <span class="timeview__parent">· ' + Util.escapeHtml(item.parentText) + '</span>'
           : '') +
       '</span>' +
+      // v2.11 需求 1/2（见 DS 2.46）：右侧这串控件收进一个组
+      '<span class="task__actions">' +
+      (item.bonus ? '<span class="bonus__mark" title="Bonus">🎁</span>' : '') +
       buildSlotSelectHtml(slot) +
       '<button type="button" class="stage__del" aria-label="删除阶段">×</button>' +
+      '</span>' +
     '</li>';
   }
 
@@ -669,7 +848,7 @@ var Render = (function (CONFIG, Util) {
     var editing = view.editing || null;
     var list = Array.isArray(templates) ? templates : [];
 
-    var head = '<header class="tpl__head">' +
+    var head = '<header class="tpl__head">' + panelToggleHtml('templates', view) +
       '<span class="tpl__title">模板</span>' +
       '<span class="tpl__count">' + (list.length ? String(list.length) : '') + '</span>' +
       '<button type="button" class="tpl__save"' +
@@ -688,6 +867,146 @@ var Render = (function (CONFIG, Util) {
     return head + '<ul class="tpl__list">' + rows + '</ul>';
   }
 
+  /**
+   * 阅读栏（v2.8 需求 2，见 DS 2.37）。
+   *
+   * 上下两段：**正在阅读**（可勾完成 / 改名 / 设起始时间 / 删除）和
+   * **已读完成**（起始 → 完成时刻，可改起始时间、可取消完成、可删除）。
+   *
+   * 结构 = { active: [...], done: [...] }，两个数组都在数据里，渲染只负责画。
+   * 「正在阅读」的条数超过 CONFIG.READING_ACTIVE_HINT 时把计数标红 ——
+   * 需求说的是「提示不超过3项」，所以只提示不拦（D-64）。
+   */
+  function buildReadingHtml(reading, view) {
+    view = view || {};
+    var editing = view.editing || null;
+    var src = (reading && typeof reading === 'object') ? reading : {};
+    var active = Array.isArray(src.active) ? src.active : [];
+    var done = Array.isArray(src.done) ? src.done : [];
+    var limit = CONFIG.READING_ACTIVE_HINT;
+
+    var head = '<header class="reading__head">' + panelToggleHtml('reading', view) +
+      '<span class="reading__name">📖 阅读栏</span>' +
+      '<span class="reading__count' + (active.length > limit ? ' reading__count--over' : '') +
+        '" title="' + (active.length > limit
+          ? '正在阅读 ' + active.length + ' 项，建议不超过 ' + limit + ' 项'
+          : '正在阅读 / 建议上限') +
+        '">' + active.length + '/' + limit + '</span>' +
+      '<button type="button" class="reading__add"' +
+        ' title="添加正在阅读的事项" aria-label="添加正在阅读的事项">＋</button>' +
+      '</header>';
+
+    var adding = !!(editing && editing.mode === 'add-reading');
+    var addRow = adding
+      ? '<li class="reading__item reading__item--editing">' +
+          '<div class="task__row">' +
+            '<input type="text" class="task__input" value=""' +
+              ' maxlength="500" placeholder="正在读什么？回车确认" aria-label="新阅读事项">' +
+          '</div>' +
+        '</li>'
+      : '';
+
+    if (!active.length && !done.length && !adding) {
+      return head + '<p class="reading__empty">还没有在读的东西。点右上角「＋」' +
+        '记一条，读完勾掉，它就会出现在下面的「已读完成」里。</p>';
+    }
+
+    var rows = '';
+    for (var i = 0; i < active.length; i++) {
+      rows += buildReadingItemHtml(active[i], editing, false);
+    }
+    rows += addRow;
+
+    var html = head +
+      '<ul class="reading__list">' +
+        (rows || '<li class="reading__none">暂时没有正在阅读的事项</li>') +
+      '</ul>';
+
+    var doneRows = '';
+    for (var k = 0; k < done.length; k++) {
+      doneRows += buildReadingItemHtml(done[k], editing, true);
+    }
+
+    html += '<div class="reading__done">' +
+      '<p class="reading__subtitle">已读完成' +
+        '<span class="reading__done-count">' + (done.length ? String(done.length) : '') +
+        '</span></p>' +
+      (done.length
+        ? '<ul class="reading__done-list">' + doneRows + '</ul>'
+        : '<p class="reading__done-empty">还没有读完的。勾掉上面的一条，' +
+          '这里会记下完成时间。</p>') +
+      '</div>';
+
+    return html;
+  }
+
+  /**
+   * 一条阅读记录。done 为 true 画在「已读完成」那段里：
+   * 开头多一个「↩」取消完成，日期后面跨天时多一个「→ 完成日期」。
+   *
+   * 两个编辑态各用各的输入框：改名复用 task__input（和别处一致，
+   * 键盘 / 失焦提交也就共用了），起始日期用 <input type="date">。
+   */
+  function buildReadingItemHtml(item, editing, done) {
+    var id = Util.escapeHtml(item.id);
+    var isEditing = !!(editing && editing.mode === 'edit-reading' &&
+                       editing.readingItemId === item.id);
+    var isEditingStart = !!(editing && editing.mode === 'edit-reading-start' &&
+                            editing.readingItemId === item.id);
+
+    if (isEditing) {
+      return '<li class="reading__item' + (done ? ' reading__item--done' : '') +
+        ' reading__item--editing" data-id="' + id + '">' +
+          '<div class="task__row">' +
+            '<input type="text" class="task__input" value="' +
+              Util.escapeHtml(item.text) + '" maxlength="500" aria-label="编辑阅读事项">' +
+          '</div></li>';
+    }
+
+    if (isEditingStart) {
+      return '<li class="reading__item' + (done ? ' reading__item--done' : '') +
+        ' reading__item--editing" data-id="' + id + '">' +
+          '<div class="task__row">' +
+            '<input type="date" class="reading__start-input" value="' +
+              Util.escapeHtml(item.start || '') + '" aria-label="设置起始日期">' +
+            '<button type="button" class="reading__start-clear"' +
+              ' title="清空起始日期" aria-label="清空起始日期">清除</button>' +
+          '</div></li>';
+    }
+
+    var left = done
+      ? '<button type="button" class="reading__restore"' +
+          ' title="取消完成，放回正在阅读" aria-label="取消完成">↩</button>'
+      : '<input type="checkbox" class="reading__check" aria-label="标记读完">';
+
+    // 起始日期**两段里都是点得动的按钮**（v2.8 补充修订三）：需求明说已读完成
+    // 那边「可以自己修改起息时间」，那就得先有个能点的东西 —— 之前那行画的是
+    // 死文本，改不了。长相和池里的完成时间按钮一模一样（D-70）。
+    var startBtn = '<button type="button" class="reading__start' +
+        (item.start ? '' : ' reading__start--empty') +
+        '" title="设定起始日期" aria-label="设定起始日期">' +
+        (item.start ? Util.escapeHtml(item.start) : '未设定') + '</button>';
+
+    // 起始日期和完成日期**同一天就只写一个**（读一本书常常当天开始当天读完，
+    // 画成「2026-10-06 → 2026-10-06」是纯噪音）；不同天才用箭头连起来
+    var doneHtml = Util.escapeHtml(item.doneAt || '');
+    var right = (done && item.doneAt && item.doneAt !== item.start)
+      ? '<span class="reading__time">' + startBtn +
+        '<span class="reading__arrow">→</span>' +
+        '<span class="reading__done-at">' + doneHtml + '</span></span>'
+      : startBtn;
+
+    return '<li class="reading__item' + (done ? ' reading__item--done' : '') +
+      '" data-id="' + id + '">' +
+        '<div class="task__row">' +
+          left +
+          '<span class="reading__text">' + Util.escapeHtml(item.text) + '</span>' +
+          right +
+          '<button type="button" class="reading__del"' +
+            ' aria-label="删除阅读事项">×</button>' +
+        '</div></li>';
+  }
+
   // ===========================================================================
   // DOM 部分：把这些字符串塞进页面
   // ===========================================================================
@@ -702,6 +1021,7 @@ var Render = (function (CONFIG, Util) {
     el.statRate = document.getElementById('stat-rate');
     el.quadrants = document.getElementById('quadrants');
     el.pool = document.getElementById('pool');
+    el.reading = document.getElementById('reading');
     el.timeview = document.getElementById('timeview');
     el.templates = document.getElementById('templates');
     el.toastHost = document.getElementById('toast-host');
@@ -732,15 +1052,40 @@ var Render = (function (CONFIG, Util) {
     el.templates.innerHTML = buildTemplatesHtml(templates, view);
   }
 
+  /** 画出阅读栏（view.reading 是数据里的 reading = { active, done }，v2.8） */
+  function renderReading(reading, view) {
+    if (!el.reading) return;
+    el.reading.innerHTML = buildReadingHtml(reading, view);
+  }
+
+  /**
+   * 板块收起（v2.8 需求 3）：把 is-collapsed 落到三个板块元素上。
+   *
+   * 收起只影响**画出来的样子**，DOM 里的内容照旧重画 —— 这样展开时不用
+   * 补渲染，也不会出现「收起期间数据变了、展开后还是旧的」。
+   */
+  function setCollapsedPanels(collapsedPanels) {
+    var panels = CONFIG.PANEL_IDS;
+    var map = collapsedPanels || {};
+    for (var i = 0; i < panels.length; i++) {
+      var node = el[panels[i]];
+      if (node) node.classList.toggle('is-collapsed', !!map[panels[i]]);
+    }
+  }
+
   /**
    * 切换主区域显示哪个视图（DS 2.13）：'quadrants' 显示四象限 + 计划池 + 模板，
    * 'time' 显示时间视图 + 计划池（计划池两个视图都留着，它跟日期无关，见 DS 2.11；
    * 模板面板只在四象限视图出现）。只是 hidden 开关，内容都在 DOM 里
+   *
+   * 阅读栏（v2.8）和计划池同待遇：**两个视图都露着**。它记的是「正在读什么」，
+   * 和日期、象限都无关，藏起来用户就点不到「完成」了。
    */
   function setViewMode(mode) {
     var isTime = (mode === 'time');
     if (el.quadrants) el.quadrants.hidden = isTime;
     if (el.pool) el.pool.hidden = false;
+    if (el.reading) el.reading.hidden = false;
     if (el.templates) el.templates.hidden = isTime;
     if (el.timeview) el.timeview.hidden = !isTime;
   }
@@ -751,22 +1096,24 @@ var Render = (function (CONFIG, Util) {
    *
    * 谁先看得见就先找谁：时间视图开着时编辑框可能长在它里面（v1.2 起
    * 时间视图可编辑），别让焦点落进藏着的那一半。
-   * 计划池的编辑框复用 task__input，外加它独有的 pool__date-input。
+   * 计划池的编辑框复用 task__input，外加它独有的 pool__date-input；
+   * 阅读栏同理，多一个 reading__start-input（v2.8）。
    */
   function focusEditor(selectAll) {
     var hosts = [];
     if (el.timeview && !el.timeview.hidden) hosts.push(el.timeview);
     if (el.quadrants && !el.quadrants.hidden) hosts.push(el.quadrants);
+    if (el.reading) hosts.push(el.reading);
     if (el.pool) hosts.push(el.pool);
     if (el.templates) hosts.push(el.templates);
 
     var input = null;
     for (var i = 0; i < hosts.length && !input; i++) {
-      input = hosts[i].querySelector('.task__input') ||
-              hosts[i].querySelector('.stage__input') ||
-              (hosts[i] === el.pool
-                ? hosts[i].querySelector('.pool__date-input')
-                : null);
+      // 一次列全所有编辑框的输入框。**屏幕上同时只有一个编辑框**（state.editing
+      // 是单个对象，渲染也只画一处），所以不必按 mode 逐个挑 —— 那种写法每加一种
+      // 编辑框都得回来补一笔，漏了就静默失效（见 DS R-40）。
+      input = hosts[i].querySelector(
+        '.task__input, .stage__input, .pool__date-input, .reading__start-input');
     }
     if (!input) return;
     input.focus();
@@ -783,7 +1130,9 @@ var Render = (function (CONFIG, Util) {
     var total = (stats && stats.total) || 0;
     el.statDone.textContent = String(done);
     el.statTotal.textContent = String(total);
-    el.statRate.textContent = formatRate(done, total);
+    // 完成率（需求 2）：分母只计非 Bonus；全是 Bonus 时退化为 Bonus 总数
+    var den = total > 0 ? total : ((stats && stats.bonusCount) || 0);
+    el.statRate.textContent = formatRate(done, den);
   }
 
   /** 整页重画（view.pool 带计划池、view.templates 带模板数据时就连着一起画） */
@@ -791,7 +1140,10 @@ var Render = (function (CONFIG, Util) {
     renderQuadrants(day, view);
     renderStats(stats);
     renderPool(view && view.pool, view);
+    renderReading(view && view.reading, view);
     renderTemplates(view && view.templates, view);
+    // 收起状态一并在重画时落下去：换视图 / 改数据都不该把收起的面板弹开
+    setCollapsedPanels(view && view.collapsedPanels);
   }
 
   /**
@@ -832,6 +1184,87 @@ var Render = (function (CONFIG, Util) {
         '.quadrant__add, .task__add-stage');
       for (var i = 0; i < buttons.length; i++) {
         buttons[i].disabled = !!readOnly;
+      }
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // 滚动位置快照（v2.10 需求 1）
+  //
+  // 重画走的是**整块 innerHTML 替换**（见 DS 2.1 的取舍）：容器元素是新造的，
+  // 浏览器的 scrollTop 天然回到 0。于是「滚到列表中间勾一条完成」这个动作会
+  // 把用户的滚动位置吃掉，条目一多就非常难用。
+  //
+  // 修法不能改成增量更新 DOM（那是把 DS 2.1 整个推翻，代价太大），而是在
+  // **重画前后各做一次快照**：渲染器只负责「采」和「贴」，什么时候用由
+  // app.js 决定（见 renderCurrent 的 keepScroll 选项）。
+  //
+  // 键必须**由结构和内容决定**，不能用元素身份 —— 每次重画都是新元素：
+  //   - 象限 / 时间视图 / 池内块各自有多份，靠 data-quadrant / data-slot /
+  //     data-id 区分；
+  //   - 计划池、模板池、阅读栏各只有一份，给个固定名就行。
+  // -------------------------------------------------------------------------
+
+  /**
+   * 登记表：**页面上每一个会纵向滚动的容器都要在这里有一行**，
+   * 漏一个那一处就还是老样子（滚回顶部）。
+   *
+   * sel   = 滚动元素本身的选择器（样式表里 overflow-y: auto 的那些）；
+   * scope = 往上找最近的这个祖先，用它的属性当键的一部分；
+   * attr  = 拿哪个属性当键（没有 scope 的行写 null）。
+   */
+  var SCROLL_SLOTS = [
+    { key: 'q',   sel: '.quadrant__body',     scope: '.quadrant',        attr: 'data-quadrant' },
+    { key: 'tv',  sel: '.timeview__list',     scope: '.timeview__group', attr: 'data-slot' },
+    { key: 'pb',  sel: '.pool__list',         scope: null,               attr: null },
+    { key: 'tpl', sel: '.tpl__list',          scope: null,               attr: null },
+    { key: 'rd',  sel: '.reading__list',      scope: null,               attr: null },
+    { key: 'rdd', sel: '.reading__done-list', scope: null,               attr: null }
+  ];
+
+  /** 一个滚动元素对应哪个键；定不出键（祖先属性缺了）就返回 null，跳过 */
+  function scrollKeyOf(node, slot) {
+    if (!slot.scope) return slot.key;
+    var scope = node.closest ? node.closest(slot.scope) : null;
+    if (!scope) return null;
+    var v = scope.getAttribute(slot.attr);
+    return v ? (slot.key + ':' + v) : null;
+  }
+
+  /**
+   * 拍快照：`{ 键 → scrollTop }`。
+   *
+   * 只在浏览器里有意义，Node 里（测试跑纯函数）没有 document，
+   * 直接返回空快照 —— 调用方不必自己判环境。
+   */
+  function captureScroll() {
+    var snap = {};
+    if (typeof document === 'undefined') return snap;
+
+    for (var i = 0; i < SCROLL_SLOTS.length; i++) {
+      var slot = SCROLL_SLOTS[i];
+      var nodes = document.querySelectorAll(slot.sel);
+      for (var j = 0; j < nodes.length; j++) {
+        var key = scrollKeyOf(nodes[j], slot);
+        if (key) snap[key] = nodes[j].scrollTop;
+      }
+    }
+    return snap;
+  }
+
+  /**
+   * 把快照贴回去。**只认键，不认元素** —— 找得到同名容器就还原，
+   * 找不到（那一段这次没画出来）就跳过，不报错。
+   */
+  function restoreScroll(snap) {
+    if (!snap || typeof document === 'undefined') return;
+
+    for (var i = 0; i < SCROLL_SLOTS.length; i++) {
+      var slot = SCROLL_SLOTS[i];
+      var nodes = document.querySelectorAll(slot.sel);
+      for (var j = 0; j < nodes.length; j++) {
+        var key = scrollKeyOf(nodes[j], slot);
+        if (key && snap[key] !== undefined) nodes[j].scrollTop = snap[key];
       }
     }
   }
@@ -908,6 +1341,64 @@ var Render = (function (CONFIG, Util) {
 
     var okBtn = host.querySelector('[data-act="ok"]');
     if (okBtn) okBtn.focus();
+  }
+
+  /**
+   * 弹一个多选对话框，让用户在几个动作里挑一个（导入的「合并 / 覆盖」用）。
+   *
+   * @param {Object} options { title, message, choices: [{ act, label, danger }] }
+   * @param {Function} onPick 用户点了某个动作才回调（传那个动作的 act）；取消不回调
+   */
+  function openChoice(options, onPick) {
+    options = options || {};
+    var host = ensureConfirmHost();
+
+    var buttons = '';
+    var choices = Array.isArray(options.choices) ? options.choices : [];
+    for (var i = 0; i < choices.length; i++) {
+      var c = choices[i];
+      buttons += '<button type="button" class="btn ' +
+        (c.danger ? 'btn--danger' : 'btn--primary') + '" data-act="' +
+        Util.escapeHtml(c.act) + '">' + Util.escapeHtml(c.label) + '</button>';
+    }
+
+    host.innerHTML = '' +
+      '<div class="modal__box" role="dialog" aria-modal="true">' +
+        '<h2 class="modal__title">' + Util.escapeHtml(options.title || '') + '</h2>' +
+        (options.message
+          ? '<p class="modal__text">' + Util.escapeHtml(options.message) + '</p>'
+          : '') +
+        '<div class="modal__actions">' +
+          buttons +
+          '<button type="button" class="btn" data-act="cancel">取消</button>' +
+        '</div>' +
+      '</div>';
+    host.hidden = false;
+
+    function close() {
+      host.hidden = true;
+      host.innerHTML = '';
+      host.removeEventListener('click', onClick);
+      document.removeEventListener('keydown', onKeyDown);
+    }
+
+    function onClick(e) {
+      var btn = (e.target && e.target.closest) ? e.target.closest('[data-act]') : null;
+      if (!btn) {
+        if (e.target === host) close();
+        return;
+      }
+      var act = btn.getAttribute('data-act');
+      close();
+      if (act !== 'cancel' && onPick) onPick(act);
+    }
+
+    function onKeyDown(e) {
+      if (e.key === 'Escape') close();
+    }
+
+    host.addEventListener('click', onClick);
+    document.addEventListener('keydown', onKeyDown);
   }
 
   /**
@@ -1006,9 +1497,13 @@ var Render = (function (CONFIG, Util) {
     buildDayHtml: buildDayHtml,
     buildPoolHtml: buildPoolHtml,
     buildPoolItemHtml: buildPoolItemHtml,
+    buildPoolBlockHtml: buildPoolBlockHtml,
     buildTimeViewHtml: buildTimeViewHtml,
     buildTemplatesHtml: buildTemplatesHtml,
     buildTemplateItemHtml: buildTemplateItemHtml,
+    buildReadingHtml: buildReadingHtml,
+    buildReadingItemHtml: buildReadingItemHtml,
+    panelToggleHtml: panelToggleHtml,
     formatRate: formatRate,
     fallbackProgress: fallbackProgress,
 
@@ -1019,13 +1514,21 @@ var Render = (function (CONFIG, Util) {
     renderPool: renderPool,
     renderTimeView: renderTimeView,
     renderTemplates: renderTemplates,
+    renderReading: renderReading,
+    setCollapsedPanels: setCollapsedPanels,
     setViewMode: setViewMode,
     renderStats: renderStats,
     focusEditor: focusEditor,
     setBanner: setBanner,
     setReadOnly: setReadOnly,
     setTheme: setTheme,
+    // 滚动快照（v2.10 需求 1）：登记表也导出，供守卫测试核对「每一个
+    // 纵向滚动容器都登记了」
+    SCROLL_SLOTS: SCROLL_SLOTS,
+    captureScroll: captureScroll,
+    restoreScroll: restoreScroll,
     openConfirm: openConfirm,
+    openChoice: openChoice,
     openText: openText
   };
 })(

@@ -11,7 +11,7 @@
  * ——也就是不压缩，原样塞进去。JSON 和 Markdown 都是文本，压缩比很高，
  * 但为了省这点体积去自己实现 DEFLATE 不划算，而且那是最容易写错的部分。
  */
-var Exporter = (function (CONFIG, Util, Store) {
+var Exporter = (function (CONFIG, Util, Store, TaskOps) {
   'use strict';
 
   // =========================================================================
@@ -222,13 +222,35 @@ var Exporter = (function (CONFIG, Util, Store) {
    * 就是清清楚楚的多级列表，人一眼看得出谁是谁的子项。
    */
   function pushTaskLines(lines, task, indent) {
-    lines.push(indent + '- [' + (task.completed ? 'x' : ' ') + '] ' + escapeMd(task.text));
+    // Bonus（需求 2）：任务文字前加 🎁 前缀，让它在日报里一眼看出是「额外加分」
+    lines.push(indent + '- [' + (task.completed ? 'x' : ' ') + '] ' +
+      (task.bonus === true ? '🎁 ' : '') + escapeMd(task.text));
 
     var stages = Array.isArray(task.stages) ? task.stages : [];
     for (var s = 0; s < stages.length; s++) {
       lines.push(indent + '  - [' + (stages[s].completed ? 'x' : ' ') + '] ' +
-        escapeMd(stages[s].text));
+        (stages[s].bonus === true ? '🎁 ' : '') + escapeMd(stages[s].text));
     }
+  }
+
+  /**
+   * 一天的统计行（需求 1）：日报里每个日期标题下那一行。
+   *
+   * 数字完全消费 task-ops.getStats —— 统计口径（含 Bonus）只有它一份实现，
+   * 日报才不会和首页对不上（见 DS 2.15）。完成率直接用 getStats 算好的 rate：
+   * 有普通项按普通项、全 Bonus 按 Bonus 总数退化，一条都没有时是「—」。
+   */
+  function statsLine(data, dateStr) {
+    var s = TaskOps.getStats(data, dateStr);
+    var rate = (s.rate === null || s.rate === undefined)
+      ? '—' : Math.round(s.rate * 100) + '%';
+    // 这里只拼纯文本；Markdown 的块引用「>」由 buildMarkdown 加，PDF 的
+    // <p class="print__stats"> 由 pdf.js 加 —— 两种格式共用同一句文本
+    var line = '✅ 已完成 ' + s.done + ' / 总数 ' + s.total + ' · 完成率 ' + rate;
+    if (s.bonusCount > 0) {
+      line += ' · 含 Bonus ' + s.bonusDone + '/' + s.bonusCount;
+    }
+    return line;
   }
 
   /**
@@ -242,7 +264,7 @@ var Exporter = (function (CONFIG, Util, Store) {
     options = options || {};
     var dates = options.dateStr ? [options.dateStr] : Store.listDates(data);
 
-    var lines = ['# 四象限任务', ''];
+    var lines = ['# MyPal', ''];
 
     if (!dates.length) {
       lines.push('（还没有任何数据）');
@@ -255,6 +277,10 @@ var Exporter = (function (CONFIG, Util, Store) {
       var day = Store.getDayTasks(data, dateStr);
 
       lines.push('## ' + dateStr);
+      lines.push('');
+
+      // 日报自动加入当日统计（需求 1）：每个日期标题下一行统计（Markdown 块引用）
+      lines.push('> ' + statsLine(data, dateStr));
       lines.push('');
 
       for (var q = 0; q < CONFIG.QUADRANTS.length; q++) {
@@ -312,8 +338,55 @@ var Exporter = (function (CONFIG, Util, Store) {
    * 的地方（30 天归档），都**必须由用户点一下**来触发，不能自己偷偷下，
    * 否则被浏览器拦掉时就是：文件没落盘、本地又删了，数据当场蒸发（见 DS 2.4）。
    */
-  function download(filename, blob) {
-    if (typeof document === 'undefined' || !document.createElement) return false;
+  /** 是否跑在 Capacitor 打的安卓 App 里（网页版 / 测试里都是 false） */
+  function isNative() {
+    return typeof window !== 'undefined' && window.Capacitor &&
+           typeof window.Capacitor.isNativePlatform === 'function' &&
+           window.Capacitor.isNativePlatform();
+  }
+
+  function blobToBase64(blob) {
+    return new Promise(function (resolve, reject) {
+      var reader = new FileReader();
+      reader.onload = function () { resolve(reader.result); };
+      reader.onerror = function () { reject(reader.error || new Error('读取文件失败')); };
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  /**
+   * 安卓 App：把文件写进系统「下载」文件夹（原生插件 ExportFile）。
+   * WebView 不认 blob 下载，网页版那套 <a download> 在 App 里会静默失效。
+   */
+  function nativeSave(filename, blob, onDone) {
+    blobToBase64(blob).then(function (dataUrl) {
+      var comma = dataUrl.indexOf(',');
+      var base64 = comma === -1 ? dataUrl : dataUrl.slice(comma + 1);
+      return window.Capacitor.Plugins.ExportFile.save({
+        filename: filename,
+        data: base64,
+        mimeType: blob.type || 'application/octet-stream'
+      });
+    }).then(function () {
+      if (typeof Toast !== 'undefined') Toast.success('已保存到「下载」文件夹：' + filename);
+      if (onDone) onDone(true);
+    }).catch(function (err) {
+      if (typeof Toast !== 'undefined') Toast.error('导出失败：' + ((err && err.message) || '未知原因'));
+      if (onDone) onDone(false);
+    });
+  }
+
+  function download(filename, blob, onDone) {
+    if (typeof document === 'undefined' || !document.createElement) {
+      if (onDone) onDone(false);
+      return false;
+    }
+
+    // 安卓 App：走原生插件写「下载」文件夹（异步，onDone 报告成功/失败）
+    if (isNative() && window.Capacitor.Plugins && window.Capacitor.Plugins.ExportFile) {
+      nativeSave(filename, blob, onDone);
+      return true;
+    }
 
     var url = URL.createObjectURL(blob);
     var a = document.createElement('a');
@@ -325,6 +398,7 @@ var Exporter = (function (CONFIG, Util, Store) {
     document.body.removeChild(a);
     // 立刻回收会让部分浏览器来不及取数据，推迟一点
     setTimeout(function () { URL.revokeObjectURL(url); }, 10000);
+    if (onDone) onDone(true);
     return true;
   }
 
@@ -335,10 +409,17 @@ var Exporter = (function (CONFIG, Util, Store) {
       bytesToBlob(utf8Bytes(text), 'application/json'));
   }
 
-  /** 导出 Markdown */
-  function exportMarkdown(data, when) {
-    var text = buildMarkdown(data);
-    download('quadrant-' + stamp(when) + '.md',
+  /**
+   * 导出 Markdown。
+   *
+   * v2.6 需求 4：日报只记**当前查看的那一天** —— 传 dateStr 就只导那一天，
+   * 文件名也跟着用那天的日期（导出 10 月 1 日的日报，文件就叫
+   * `quadrant-2026-10-01.md`）。不传 dateStr 时保持老行为：导出全部日期、
+   * 文件名用当前时间戳（ZIP 里的那份 Markdown 走的就是这条）。
+   */
+  function exportMarkdown(data, when, dateStr) {
+    var text = buildMarkdown(data, { dateStr: dateStr });
+    download('quadrant-' + (dateStr || stamp(when)) + '.md',
       bytesToBlob(utf8Bytes(text), 'text/markdown'));
   }
 
@@ -359,12 +440,12 @@ var Exporter = (function (CONFIG, Util, Store) {
    * 导出 30 天归档。
    * 调用方必须**先确认这次下载真的发出去了**，才允许从本地删掉那部分数据。
    */
-  function exportArchive(data, plan, when) {
+  function exportArchive(data, plan, when, onDone) {
     var date = stamp(when);
     var payload = Store.buildArchivePayload(data, plan);
     var text = Store.serialize(payload);
     return download('quadrant-archive-' + date + '.json',
-      bytesToBlob(utf8Bytes(text), 'application/json'));
+      bytesToBlob(utf8Bytes(text), 'application/json'), onDone);
   }
 
   /**
@@ -389,9 +470,11 @@ var Exporter = (function (CONFIG, Util, Store) {
     buildZip: buildZip,
     buildMarkdown: buildMarkdown,
     escapeMd: escapeMd,
+    statsLine: statsLine,
 
     // DOM
     download: download,
+    isNative: isNative,
     exportJson: exportJson,
     exportMarkdown: exportMarkdown,
     exportZip: exportZip,
@@ -401,7 +484,8 @@ var Exporter = (function (CONFIG, Util, Store) {
 })(
   typeof CONFIG !== 'undefined' ? CONFIG : require('./config.js'),
   typeof Util !== 'undefined' ? Util : require('./util.js'),
-  typeof Store !== 'undefined' ? Store : require('./store.js')
+  typeof Store !== 'undefined' ? Store : require('./store.js'),
+  typeof TaskOps !== 'undefined' ? TaskOps : require('./task-ops.js')
 );
 
 // Node 测试环境用（浏览器里没有 module，这段不会执行）

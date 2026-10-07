@@ -26,8 +26,9 @@ function seed(quadrantTexts) {
   var data = Store.createEmpty();
   var ids = [];
   var texts = quadrantTexts || ['甲', '乙', '丙'];
-  for (var i = 0; i < texts.length; i++) {
-    ids.push(TaskOps.addTask(data, DATE, 'I', texts[i]).task.id);
+  // addTask 默认把新任务加在开头（需求 3），倒着加才能让最终顺序和 texts 一致
+  for (var i = texts.length - 1; i >= 0; i--) {
+    ids.unshift(TaskOps.addTask(data, DATE, 'I', texts[i]).task.id);
   }
   return { data: data, ids: ids };
 }
@@ -136,9 +137,9 @@ t('带位置时按占位符承诺的位置插', function () {
   var s = seed();
   TaskOps.postponeTask(s.data, DATE, 'I', s.ids[0]);
 
-  // 拖到 II 象限已有的甲、乙之间 → toIndex 1
-  TaskOps.addTask(s.data, DATE, 'II', '甲二');
+  // 拖到 II 象限已有的甲、乙之间 → toIndex 1（新任务默认加在开头，倒着加）
   TaskOps.addTask(s.data, DATE, 'II', '乙二');
+  TaskOps.addTask(s.data, DATE, 'II', '甲二');
   TaskOps.restoreFromPool(s.data, DATE, 'II', s.ids[0], 1);
 
   h.assertEqual(quadrantTexts(s.data, 'II'), '甲二,甲,乙二');
@@ -278,20 +279,22 @@ t('pool 不是数组 → 丢掉重来（空数组）', function () {
   h.assertEqual(result.data.pool.length, 0);
 });
 
-t('池里的块和脏任务被清洗掉，好的留着', function () {
+t('池里的脏任务被清洗掉，好的（含任务块）留着', function () {
   var result = Store.parse(JSON.stringify({
     dates: {},
     pool: [
       { id: 'ok1', text: '好的', completed: false, createdAt: 1 },
-      { id: 'blk', type: 'block', text: '块不该在池里', completed: false, createdAt: 1, tasks: [] },
+      { id: 'blk', type: 'block', text: '池里的块合法', completed: false, createdAt: 1, tasks: [] },
       { text: '   ' },
       '连对象都不是'
     ]
   }));
 
-  h.assertEqual(result.data.pool.length, 1);
+  // 需求 4：池里允许放任务块，所以块不再被洗掉；脏任务（空文本、非对象）照旧丢
+  h.assertEqual(result.data.pool.length, 2);
   h.assertEqual(result.data.pool[0].text, '好的');
-  h.assertEqual(result.dropped, 3, '丢掉的都要计数');
+  h.assertEqual(result.data.pool[1].type, 'block');
+  h.assertEqual(result.dropped, 2, '丢掉的都要计数');
 });
 
 t('池内任务的 completed 以阶段为准', function () {
@@ -400,13 +403,11 @@ t('pool 不是列表 → 整份拒绝', function () {
   h.assertEqual(result.error, Importer.ERR.BAD_POOL);
 });
 
-t('池里放块 / 放坏任务 → 整份拒绝，报错说清是第几条', function () {
-  var badBlock = Importer.validate(poolFile([
+t('池里放块合法（需求 4），放坏任务 → 整份拒绝，报错说清是第几条', function () {
+  var goodBlock = Importer.validate(poolFile([
     { type: 'block', text: '块', completed: false, tasks: [] }
   ]));
-  h.assertFalse(badBlock.ok);
-  h.assertEqual(badBlock.error, Importer.ERR.BAD_POOL);
-  h.assertTrue(badBlock.message.indexOf('计划池') !== -1);
+  h.assertTrue(goodBlock.ok, '池里的任务块合法，不再拒绝');
 
   var badTask = Importer.validate(poolFile([
     { text: '好的' },
@@ -427,7 +428,7 @@ t('一处不对整份拒绝时，本地数据一个字节不动', function () {
 });
 
 // ---------------------------------------------------------------------------
-h.group('界面：推迟按钮只给顶层任务，池的行没有勾选框');
+h.group('界面：推迟按钮给顶层任务和没阶段的块内任务，池内条目自带勾选框');
 
 t('顶层任务的行上有「推迟」按钮', function () {
   var html = Render.buildTaskHtml(
@@ -436,16 +437,30 @@ t('顶层任务的行上有「推迟」按钮', function () {
   h.assertTrue(html.indexOf('task__postpone') !== -1);
 });
 
-t('块内任务的行上没有「推迟」按钮', function () {
+t('块内没阶段的任务也有「推迟」按钮（requirements 第 2 条）', function () {
   var block = {
     id: 'b1', type: 'block', text: '晨间例程', completed: false, createdAt: 1,
     tasks: [{ id: 'c1', text: '喝水', completed: false, createdAt: 1 }]
   };
   var html = Render.buildBlockHtml(block, {});
 
-  h.assertTrue(html.indexOf('task__postpone') === -1,
-    '块内要推迟先拖出块，不给按钮');
+  h.assertTrue(html.indexOf('task__postpone') !== -1, '没阶段的块内任务要能推迟');
   h.assertTrue(html.indexOf('喝水') !== -1, '任务本身照常渲染');
+});
+
+t('块内拆了阶段的任务不整条推迟，靠逐个阶段推迟', function () {
+  var block = {
+    id: 'b2', type: 'block', text: '晨间例程', completed: false, createdAt: 1,
+    tasks: [{
+      id: 'c2', text: '写报告', completed: false, createdAt: 1,
+      stages: [{ id: 's1', text: '收集数据', completed: false, createdAt: 1 }]
+    }]
+  };
+  var html = Render.buildBlockHtml(block, {});
+
+  // 块头有 block__postpone（整体推迟照常），但这条带阶段的任务行不给 task__postpone
+  h.assertTrue(html.indexOf('block__postpone') !== -1, '块头整体推迟照常在');
+  h.assertFalse(html.indexOf('task__postpone') !== -1, '有阶段的块内任务不出现整条推迟');
 });
 
 t('空池显示占位提示', function () {
@@ -456,14 +471,16 @@ t('空池显示占位提示', function () {
   h.assertTrue(html.indexOf('pool__list') === -1, '没有条目就别画空列表');
 });
 
-t('池内每一行：有文字和删除，没有勾选框', function () {
+t('池内每一行：有文字、删除和勾选框（v2.7 之前这里断言的是「没有勾选框」）', function () {
   var html = Render.buildPoolHtml([
     { id: 'p1', text: '相册整理', completed: true, createdAt: 1 }
   ], {});
 
   h.assertTrue(html.indexOf('data-id="p1"') !== -1);
   h.assertTrue(html.indexOf('pool__del') !== -1);
-  h.assertTrue(html.indexOf('task__check') === -1, '池里是待安排，不是正在做');
+  h.assertTrue(html.indexOf('pool__check') !== -1, 'v2.7 起池内也能勾完成');
+  h.assertTrue(html.indexOf('task__check') === -1,
+    '但用的是池自己的类名：池里勾选 ≠ 象限里「正在做」，池内条目照样整条可拖（D-62）');
   h.assertTrue(html.indexOf('pool__count') !== -1, '头上有个数');
 });
 

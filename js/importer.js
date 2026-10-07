@@ -33,7 +33,8 @@ var Importer = (function (CONFIG, Util, Store) {
     BAD_STAGE: 'BAD_STAGE',         // 某个阶段不合法
     BAD_BLOCK: 'BAD_BLOCK',         // 某个任务块不合法（含块里套块）
     BAD_POOL: 'BAD_POOL',           // 计划池不合法（不是列表 / 里面有块或坏任务）
-    BAD_TEMPLATE: 'BAD_TEMPLATE'    // 模板不合法（不是列表 / 没名字 / items 不合法）
+    BAD_TEMPLATE: 'BAD_TEMPLATE',   // 模板不合法（不是列表 / 没名字 / items 不合法）
+    BAD_READING: 'BAD_READING'      // 阅读栏不合法（不是对象 / active / done 不是列表 / 条目没名字）
   };
 
   var ERR_TEXT = {};
@@ -49,6 +50,7 @@ var Importer = (function (CONFIG, Util, Store) {
   ERR_TEXT[ERR.BAD_BLOCK] = '文件里某个任务块的内容不合法。';
   ERR_TEXT[ERR.BAD_POOL] = '文件里计划池的内容不合法。';
   ERR_TEXT[ERR.BAD_TEMPLATE] = '文件里模板的内容不合法。';
+  ERR_TEXT[ERR.BAD_READING] = '文件里阅读栏的内容不合法。';
 
   function isPlainObject(v) {
     return v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -61,6 +63,23 @@ var Importer = (function (CONFIG, Util, Store) {
       // 给用户看的说明：只说人话，附上「哪里不对」，别让用户自己去猜
       message: ERR_TEXT[error] + (detail ? '（' + detail + '）' : '')
     };
+  }
+
+  /**
+   * 检查一个**可选**的日期字段（阅读栏的起始 / 完成日期，v2.8）。
+   * 没有 / 空串 = 没设（回 null）；有但不合法 → 拒绝，不猜也不静默丢掉。
+   *
+   * 走的是宽松版 `isValidReadingStamp`：v2.8 初版存的是 'HH:MM'，用户手里
+   * 那样的文件必须还能导进来，否则「兼容前面版本导出的 JSON」就破了。
+   */
+  function readOptionalStamp(value, where) {
+    if (value === undefined || value === null || value === '') {
+      return { ok: true, stamp: null };
+    }
+    if (!Util.isValidReadingStamp(value)) {
+      return { ok: false, fail: fail(ERR.BAD_READING, where + '不是 YYYY-MM-DD') };
+    }
+    return { ok: true, stamp: value };
   }
 
   // -------------------------------------------------------------------------
@@ -100,7 +119,11 @@ var Importer = (function (CONFIG, Util, Store) {
           slot: (typeof rawStage.slot === 'string' &&
                  CONFIG.SLOTS.indexOf(rawStage.slot) !== -1)
             ? rawStage.slot
-            : null
+            : null,
+          // Bonus（需求 2）：只认 === true，别的都当普通
+          bonus: rawStage.bonus === true ? true : null,
+          // 高亮（DS 2.40）：同 bonus，只认 === true
+          highlight: rawStage.highlight === true ? true : null
         });
       }
       if (!stages.length) stages = null;
@@ -127,7 +150,12 @@ var Importer = (function (CONFIG, Util, Store) {
         slot: (typeof rawTask.slot === 'string' &&
                CONFIG.SLOTS.indexOf(rawTask.slot) !== -1)
           ? rawTask.slot
-          : null
+          : null,
+        // Bonus（需求 2）：只认 === true，别的都当普通
+        bonus: rawTask.bonus === true ? true : null,
+        // 高亮（DS 2.40）：同 bonus，只认 === true；老备份没有这个字段
+        // → null，当「没高亮」收下，不拒整份
+        highlight: rawTask.highlight === true ? true : null
       }
     };
   }
@@ -171,6 +199,8 @@ var Importer = (function (CONFIG, Util, Store) {
         createdAt: (typeof rawBlock.createdAt === 'number' && isFinite(rawBlock.createdAt))
           ? rawBlock.createdAt
           : null,
+        // 高亮（DS 2.40）：同任务，只认 === true
+        highlight: rawBlock.highlight === true ? true : null,
         tasks: children
       }
     };
@@ -270,9 +300,13 @@ var Importer = (function (CONFIG, Util, Store) {
         var rawPoolItem = raw.pool[p];
         var poolWhere = '计划池的第 ' + (p + 1) + ' 条';
 
-        // 池里只装推迟下来的任务，块不该出现（页面上推迟按钮只给任务）
+        // 需求（重命名后 4）：池里可以是任务，也可以是任务块（整体推迟下来的）。
+        // 块内仍遵守规矩 1（块里不允许再套块），坏块整份拒绝
         if (isPlainObject(rawPoolItem) && rawPoolItem.type === 'block') {
-          return fail(ERR.BAD_POOL, poolWhere + '（计划池里不允许放任务块）');
+          var checkedPoolBlock = checkBlock(rawPoolItem, poolWhere);
+          if (!checkedPoolBlock.ok) return checkedPoolBlock.fail;
+          pool.push(checkedPoolBlock.block);
+          continue;
         }
 
         var checkedPool = checkTask(rawPoolItem, poolWhere);
@@ -334,6 +368,47 @@ var Importer = (function (CONFIG, Util, Store) {
       }
     }
 
+    // ---- 阅读栏（v2.8 需求 2）：**可选** —— 和 pool / templates 同一条规矩，
+    // 「没有」合法（v2.8 之前导出的文件都没有），「有但不合法」整份拒绝
+    var reading = null;
+    if (raw.reading !== undefined && raw.reading !== null) {
+      if (!isPlainObject(raw.reading)) {
+        return fail(ERR.BAD_READING, 'reading 不是一个对象');
+      }
+      reading = { active: [], done: [] };
+      var readingTables = ['active', 'done'];
+      for (var rt = 0; rt < readingTables.length; rt++) {
+        var tableName = readingTables[rt];
+        var rawList = raw.reading[tableName];
+        if (rawList === undefined || rawList === null) continue; // 缺一张表当空表
+        if (!Array.isArray(rawList)) {
+          return fail(ERR.BAD_READING, 'reading.' + tableName + ' 不是一个列表');
+        }
+        for (var ri = 0; ri < rawList.length; ri++) {
+          var rawRead = rawList[ri];
+          var readWhere = '阅读栏「' + (tableName === 'active' ? '正在阅读' : '已读完成') +
+            '」第 ' + (ri + 1) + ' 条';
+          if (!isPlainObject(rawRead) || !Util.isValidTaskText(rawRead.text)) {
+            return fail(ERR.BAD_READING, readWhere + '（没有内容）');
+          }
+          // 日期字段：没有 / 空串当「没设」，有但不合法就拒绝（脏数据不猜）
+          var readStart = readOptionalStamp(rawRead.start, readWhere + '的起始日期');
+          if (!readStart.ok) return readStart.fail;
+          var readDoneAt = readOptionalStamp(rawRead.doneAt, readWhere + '的完成日期');
+          if (!readDoneAt.ok) return readDoneAt.fail;
+
+          reading[tableName].push({
+            text: Util.cleanText(rawRead.text),
+            start: readStart.stamp,
+            doneAt: (tableName === 'done') ? readDoneAt.stamp : null,
+            createdAt: (typeof rawRead.createdAt === 'number' && isFinite(rawRead.createdAt))
+              ? rawRead.createdAt
+              : null
+          });
+        }
+      }
+    }
+
     return {
       ok: true,
       data: {
@@ -343,7 +418,8 @@ var Importer = (function (CONFIG, Util, Store) {
           : CONFIG.SCHEMA_VERSION,
         dates: dates,
         pool: pool,          // null 表示文件里没有计划池，不是「有零条的池」
-        templates: templates // null 同理：文件里没有模板
+        templates: templates, // null 同理：文件里没有模板
+        reading: reading     // 同上：文件里没有阅读栏
       }
     };
   }
@@ -374,6 +450,7 @@ var Importer = (function (CONFIG, Util, Store) {
    * 把导入的一条任务深拷贝成本地的新任务。
    * **编号全部换新的** —— 文件里的编号在本地可能撞车（见 D-09）。
    * 阶段跟着一起搬，completed 以阶段为准 —— 文件里那个值可能和阶段对不上。
+   * 判断口径走 `Store.allDone`（v2.5）：每个阶段（含 Bonus）都完成才算完成。
    */
   function copyTask(src) {
     var task = {
@@ -389,9 +466,14 @@ var Importer = (function (CONFIG, Util, Store) {
     // 完成时段跟着文件走（DS 2.12）
     if (src.slot) task.slot = src.slot;
 
+    // Bonus 跟着文件走（需求 2）
+    if (src.bonus) task.bonus = true;
+
+    // 高亮跟着文件走（DS 2.40）。老板份里 checkTask 给的是 null → 不写字段
+    if (src.highlight) task.highlight = true;
+
     if (src.stages && src.stages.length) {
       task.stages = [];
-      var allDone = true;
       for (var s = 0; s < src.stages.length; s++) {
         var stage = src.stages[s];
         var copiedStage = {
@@ -401,13 +483,40 @@ var Importer = (function (CONFIG, Util, Store) {
           createdAt: Date.now()
         };
         if (stage.slot) copiedStage.slot = stage.slot;
+        if (stage.bonus) copiedStage.bonus = true;
+        if (stage.highlight) copiedStage.highlight = true;
         task.stages.push(copiedStage);
-        if (!stage.completed) allDone = false;
       }
-      task.completed = allDone;
+      // 口径和 store / task-ops 共用同一份（v2.5）：每个阶段都完成才算完成。
+      // 别在这里另写一套 —— 口径一旦分叉，导入进来的 completed 就和界面上的对不上。
+      task.completed = Store.allDone(task.stages);
     }
 
     return task;
+  }
+
+  /**
+   * 把导入的一个任务块深拷贝成本地的新块。
+   * 和 copyTask 同一条规矩：块自己换新 id，块内任务也各换新 id（见 D-09），
+   * 完成状态以块内任务为准。
+   */
+  function copyBlock(src) {
+    var srcChildren = Array.isArray(src.tasks) ? src.tasks : [];
+    var block = {
+      id: Util.genId(),
+      type: 'block',
+      text: src.text,
+      completed: src.completed,
+      createdAt: src.createdAt !== null ? src.createdAt : Date.now(),
+      tasks: []
+    };
+    for (var c = 0; c < srcChildren.length; c++) {
+      block.tasks.push(copyTask(srcChildren[c]));
+    }
+    // 块头的高亮跟着文件走（高亮不传染，块内任务各走各的，见 DS 2.40）
+    if (src.highlight) block.highlight = true;
+    block.completed = Store.blockDone(block.tasks);
+    return block;
   }
 
   /**
@@ -460,25 +569,11 @@ var Importer = (function (CONFIG, Util, Store) {
           }
 
           if (incomingItem.type === 'block') {
-            // 块整体搬入：块自己换新 id，块内任务也各换新 id（同一个道理，见 D-09）
-            var srcChildren = Array.isArray(incomingItem.tasks) ? incomingItem.tasks : [];
-            var block = {
-              id: Util.genId(),
-              type: 'block',
-              text: text,
-              completed: incomingItem.completed,
-              createdAt: incomingItem.createdAt !== null
-                ? incomingItem.createdAt
-                : Date.now(),
-              tasks: []
-            };
-            for (var c = 0; c < srcChildren.length; c++) {
-              block.tasks.push(copyTask(srcChildren[c]));
-            }
-            // 块的完成状态以块内任务为准 —— 和任务的 completed 以阶段为准同理
-            block.completed = Store.blockDone(block.tasks);
-
-            Store.ensureDay(localData, dateStr)[qid].push(block);
+            // 块整体搬入：块自己换新 id，块内任务也各换新 id（同一个道理，见 D-09）。
+            // 这里**改成调 copyBlock**，不再就地重写一遍同形状的块：原先两处
+            // 各写各的，加 highlight 时漏了这一处，块的高亮就悄悄丢了
+            // （见 DS 2.40 / R-41）。同一个形状只能有一处实现。
+            Store.ensureDay(localData, dateStr)[qid].push(copyBlock(incomingItem));
             added++;
             continue;
           }
@@ -489,7 +584,8 @@ var Importer = (function (CONFIG, Util, Store) {
       }
     }
 
-    // ---- 计划池合并（见 DS 2.11）：判重只按文本，跳过的照旧保留本地的
+    // ---- 计划池合并（见 DS 2.11）：判重只按文本，跳过的照旧保留本地的。
+    // 需求（重命名后 4）：池内条目可能是任务也可能是任务块，各走各的拷贝
     if (Array.isArray(imported.pool)) {
       for (var p = 0; p < imported.pool.length; p++) {
         var incomingPoolItem = imported.pool[p];
@@ -500,7 +596,9 @@ var Importer = (function (CONFIG, Util, Store) {
         }
 
         if (!Array.isArray(localData.pool)) localData.pool = [];
-        localData.pool.push(copyTask(incomingPoolItem));
+        localData.pool.push(incomingPoolItem.type === 'block'
+          ? copyBlock(incomingPoolItem)
+          : copyTask(incomingPoolItem));
         added++;
       }
     }
@@ -537,22 +635,9 @@ var Importer = (function (CONFIG, Util, Store) {
           for (var mk = 0; mk < srcList.length; mk++) {
             var srcItem = srcList[mk];
             if (srcItem.type === 'block') {
-              var tplBlock = {
-                id: Util.genId(),
-                type: 'block',
-                text: srcItem.text,
-                completed: srcItem.completed,
-                createdAt: srcItem.createdAt !== null
-                  ? srcItem.createdAt
-                  : Date.now(),
-                tasks: []
-              };
-              var srcKids = Array.isArray(srcItem.tasks) ? srcItem.tasks : [];
-              for (var mc = 0; mc < srcKids.length; mc++) {
-                tplBlock.tasks.push(copyTask(srcKids[mc]));
-              }
-              tplBlock.completed = Store.blockDone(tplBlock.tasks);
-              tpl.items[mqid].push(tplBlock);
+              // 同样不再就地重写一遍块（理由见上面象限那处）：块这一形状
+              // 只有 copyBlock 一处实现，它认得全 highlight / bonus / slot
+              tpl.items[mqid].push(copyBlock(srcItem));
               continue;
             }
             tpl.items[mqid].push(copyTask(srcItem));
@@ -560,6 +645,46 @@ var Importer = (function (CONFIG, Util, Store) {
         }
         localData.templates.push(tpl);
         added++;
+      }
+    }
+
+    // ---- 阅读栏合并（v2.8 需求 2）：和池同一条规矩 —— 判重只按**文本**，
+    // 跳过时保留本地那条（连本地记的起始 / 完成日期一起留着，文件里的不动它）；
+    // 新搬进来的换新 id（同 D-09），完成日期照文件里的带过来
+    if (imported.reading) {
+      if (!localData.reading || typeof localData.reading !== 'object') {
+        localData.reading = { active: [], done: [] };
+      }
+      if (!Array.isArray(localData.reading.active)) localData.reading.active = [];
+      if (!Array.isArray(localData.reading.done)) localData.reading.done = [];
+
+      var readingTables = ['active', 'done'];
+      for (var rt = 0; rt < readingTables.length; rt++) {
+        var tableName = readingTables[rt];
+        var incomingList = imported.reading[tableName] || [];
+        for (var ri = 0; ri < incomingList.length; ri++) {
+          var incomingRead = incomingList[ri];
+          var dup = false;
+          for (var lr = 0; lr < localData.reading[tableName].length; lr++) {
+            if (Util.cleanText(localData.reading[tableName][lr].text) ===
+                Util.cleanText(incomingRead.text)) {
+              dup = true;
+              break;
+            }
+          }
+          if (dup) { skipped++; continue; }
+
+          localData.reading[tableName].push({
+            id: Util.genId(),
+            text: incomingRead.text,
+            start: incomingRead.start || null,
+            doneAt: (tableName === 'done') ? (incomingRead.doneAt || null) : null,
+            createdAt: incomingRead.createdAt !== null
+              ? incomingRead.createdAt
+              : Date.now()
+          });
+          added++;
+        }
       }
     }
 
@@ -580,11 +705,31 @@ var Importer = (function (CONFIG, Util, Store) {
     };
   }
 
+  /**
+   * 覆盖导入（需求 2）：用文件内容**整体替换**本地数据。
+   *
+   * 实现上就是「往一份空数据里做一次合并」—— 判重对着空数据，永远不跳过，
+   * 所以进来的东西一条不落地全搬进去；编号照旧全换新（copyTask / copyBlock）。
+   * 返回形状和 merge 一致（{ added, skipped, data }），调用方不用另学一套。
+   */
+  function overwrite(localData, imported) {
+    var empty = {
+      user: imported.user,
+      schemaVersion: imported.schemaVersion,
+      dates: {},
+      pool: [],
+      templates: [],
+      reading: { active: [], done: [] }
+    };
+    return merge(empty, imported);
+  }
+
   return {
     ERR: ERR,
     ERR_TEXT: ERR_TEXT,
     validate: validate,
     merge: merge,
+    overwrite: overwrite,
     importText: importText,
     hasSameText: hasSameText
   };

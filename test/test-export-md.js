@@ -24,7 +24,8 @@ function build(spec) {
   for (var i = 0; i < keys.length; i++) {
     var parts = keys[i].split('|');   // '2026-10-01|I'
     var texts = spec[keys[i]];
-    for (var k = 0; k < texts.length; k++) {
+    // addTask 默认把新任务加在开头（需求 3），倒着加才能让最终顺序和 spec 一致
+    for (var k = texts.length - 1; k >= 0; k--) {
       var item = texts[k];
       // 注意变量名：这里是个**布尔值**，不是那个对象本身。
       // 起名 isObj 然后写 isObj.completed，拿到的是 undefined（true.completed），
@@ -43,7 +44,7 @@ function build(spec) {
 h.group('整体结构');
 
 t('有标题', function () {
-  h.assertTrue(Exporter.buildMarkdown(Store.createEmpty()).indexOf('# 四象限任务') !== -1);
+  h.assertTrue(Exporter.buildMarkdown(Store.createEmpty()).indexOf('# MyPal') !== -1);
 });
 
 t('一天一个二级标题', function () {
@@ -303,6 +304,53 @@ t('块名里的特殊符号照常转义', function () {
   var md = Exporter.buildMarkdown(data);
   h.assertTrue(md.indexOf('**&lt;b&gt;名&lt;/b&gt;**') !== -1);
   h.assertTrue(md.indexOf('  - [ ] &lt;i&gt;甲&lt;/i&gt;') !== -1);
+});
+
+// ---------------------------------------------------------------------------
+h.group('日报只记当天（v2.6 需求 4）');
+
+t('传 dateStr 时只导出那一天，别的日期整段不出现', function () {
+  var md = Exporter.buildMarkdown(build({
+    '2026-10-01|I': ['甲'],
+    '2026-10-02|I': ['乙'],
+    '2026-10-03|I': ['丙']
+  }), { dateStr: '2026-10-02' });
+
+  h.assertTrue(md.indexOf('## 2026-10-02') !== -1, '要包含选中的那天');
+  h.assertTrue(md.indexOf('## 2026-10-01') === -1, '别把前一天也带上');
+  h.assertTrue(md.indexOf('## 2026-10-03') === -1, '别把后一天也带上');
+  h.assertTrue(md.indexOf('乙') !== -1);
+  h.assertTrue(md.indexOf('甲') === -1);
+  h.assertTrue(md.indexOf('丙') === -1);
+});
+
+t('那一天的统计行照常在', function () {
+  var md = Exporter.buildMarkdown(build({ '2026-10-01|I': ['甲'] }),
+    { dateStr: '2026-10-01' });
+  h.assertTrue(md.indexOf('> ✅ 已完成 0 / 总数 1') !== -1, '当日统计行不该少：' + md);
+});
+
+t('不传 dateStr 时保持老行为：全部日期都导', function () {
+  var md = Exporter.buildMarkdown(build({
+    '2026-10-01|I': ['甲'],
+    '2026-10-02|I': ['乙']
+  }));
+  h.assertTrue(md.indexOf('## 2026-10-01') !== -1);
+  h.assertTrue(md.indexOf('## 2026-10-02') !== -1);
+});
+
+t('那一天没有数据 → 四个象限显示「暂无任务」，不报错', function () {
+  var md = Exporter.buildMarkdown(build({ '2026-10-01|I': ['甲'] }),
+    { dateStr: '2026-11-11' });
+  h.assertTrue(md.indexOf('## 2026-11-11') !== -1);
+  h.assertEqual((md.match(/（暂无任务）/g) || []).length, 4, '四个象限各一句占位');
+  h.assertTrue(md.indexOf('甲') === -1);
+});
+
+t('dateStr 为空串 / null 时按「没指定」处理（不是导一天空的）', function () {
+  var data = build({ '2026-10-01|I': ['甲'], '2026-10-02|I': ['乙'] });
+  h.assertTrue(Exporter.buildMarkdown(data, { dateStr: '' }).indexOf('## 2026-10-02') !== -1);
+  h.assertTrue(Exporter.buildMarkdown(data, { dateStr: null }).indexOf('## 2026-10-02') !== -1);
 });
 
 // ---------------------------------------------------------------------------

@@ -363,11 +363,12 @@ t('象限内容区不再有第二个添加按钮', function () {
 // ---------------------------------------------------------------------------
 h.group('编辑状态');
 
-t('新增任务时，象限末尾多一个空输入框', function () {
+t('新增任务时，象限开头多一个空输入框（需求 3）', function () {
   var html = Render.buildQuadrantHtml('I', [task('已有的一条')],
     view({ editing: { quadrantId: 'I', mode: 'add' } }));
   h.assertTrue(html.indexOf('task__input') !== -1);
   h.assertTrue(html.indexOf('task--new') !== -1);
+  h.assertTrue(html.indexOf('task__input') < html.indexOf('已有的一条'), '输入框排在已有任务前面');
 });
 
 t('新增任务时即使一条都没有，也不显示「暂无任务」', function () {
@@ -582,7 +583,7 @@ t('别的块在改名时，这个块照常显示', function () {
   h.assertTrue(html.indexOf('没在改的') !== -1);
 });
 
-t('新增块：输入框出现在象限末尾（buildQuadrantHtml 的 add-block 模式）', function () {
+t('新增块：输入框出现在象限开头（buildQuadrantHtml 的 add-block 模式）', function () {
   var html = Render.buildQuadrantHtml('I', [],
     view({ editing: { mode: 'add-block', quadrantId: 'I' }, progressOf: TaskOps.progressOfItem }));
   h.assertTrue(html.indexOf('block--new') !== -1);
@@ -594,6 +595,28 @@ t('象限标题栏计数和块同口径：块内 2 条算 2，不算壳', functi
     [blk('块', [task('甲'), task('乙', true)])],
     view({ progressOf: TaskOps.progressOfItem }));
   h.assertTrue(html.indexOf('1/2') !== -1, '标题栏该显示 1/2');
+});
+
+// ---------------------------------------------------------------------------
+h.group('推迟按钮（requirements 第 1、2 条）');
+
+t('块头有「整体推迟」按钮', function () {
+  var html = Render.buildBlockHtml(blk('块', [task('甲')]), blockView());
+  h.assertTrue(html.indexOf('block__postpone') !== -1, '块头该有整体推迟按钮');
+});
+
+t('顶层任务有推迟按钮', function () {
+  h.assertTrue(Render.buildTaskHtml(task('顶层'), view()).indexOf('task__postpone') !== -1);
+});
+
+t('块内没拆阶段的任务也有推迟按钮（第 2 条）', function () {
+  var html = Render.buildTaskHtml(task('喝水'), view({ inBlock: true }));
+  h.assertTrue(html.indexOf('task__postpone') !== -1, '没阶段的块内任务要能推迟');
+});
+
+t('块内拆了阶段的任务不整条推迟，仍靠逐个阶段推迟', function () {
+  var html = Render.buildTaskHtml(stagedTask('带步骤', ['一']), view({ inBlock: true }));
+  h.assertFalse(html.indexOf('task__postpone') !== -1, '有阶段的块内任务不出现整条推迟');
 });
 
 // ---------------------------------------------------------------------------

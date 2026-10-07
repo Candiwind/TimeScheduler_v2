@@ -88,11 +88,12 @@ t('缓存有内容的一天：自动名 = 日期串，内容原样（含块 / �
   var items = r.template.items;
   h.assertEqual(items.I.length, 2, 'I 象限：一条任务 + 一个块');
   h.assertEqual(items.II.length, 1);
-  h.assertEqual(items.I[0].completed, true, '勾选状态原样进模板');
-  h.assertEqual(items.I[0].slot, '早上', 'slot 原样进模板');
+  // 完成沉底（需求 6）：勾完的「晨练」进模板时排在块之后
+  h.assertEqual(items.I[0].type, 'block');
+  h.assertEqual(items.I[0].tasks.length, 1, '块内任务跟着进模板');
+  h.assertEqual(items.I[1].completed, true, '勾选状态原样进模板');
+  h.assertEqual(items.I[1].slot, '早上', 'slot 原样进模板');
   h.assertEqual(items.II[0].stages.length, 1, '阶段跟着进模板');
-  h.assertEqual(items.I[1].type, 'block');
-  h.assertEqual(items.I[1].tasks.length, 1, '块内任务跟着进模板');
 });
 
 t('缓存是深拷贝：之后改那天的任务，模板不动', function () {
@@ -101,12 +102,14 @@ t('缓存是深拷贝：之后改那天的任务，模板不动', function () {
   TaskOps.toggleTask(data, DATE, 'I', seeded.a.id, true); // 先勾上，让缓存里带着 true
   var r = TaskOps.saveDayAsTemplate(data, DATE);
 
-  data.dates[DATE].I[0].text = '改成别的';
-  data.dates[DATE].I[0].completed = false;
+  // 完成沉底（需求 6）：勾完的「晨练」在模板里排在块之后，改它要用 id 定位
+  var live = TaskOps.findTask(data, DATE, 'I', seeded.a.id).task;
+  live.text = '改成别的';
+  live.completed = false;
   TaskOps.removeTask(data, DATE, 'II', seeded.b.id);
 
-  h.assertEqual(r.template.items.I[0].text, '晨练', '模板是副本不是引用');
-  h.assertEqual(r.template.items.I[0].completed, true);
+  h.assertEqual(r.template.items.I[1].text, '晨练', '模板是副本不是引用');
+  h.assertEqual(r.template.items.I[1].completed, true);
   h.assertEqual(r.template.items.II.length, 1, '删掉原任务不影响模板');
 });
 
@@ -195,7 +198,7 @@ t('应用到空的一天：条目进对应象限，结构照搬', function () {
   h.assertEqual(r.skipped, 0);
   h.assertEqual(data.dates[TARGET].I.length, 2);
   h.assertEqual(data.dates[TARGET].II[0].stages.length, 1, '阶段照搬');
-  h.assertEqual(data.dates[TARGET].I[1].tasks.length, 1, '块内任务照搬');
+  h.assertEqual(data.dates[TARGET].I[0].tasks.length, 1, '块内任务照搬');
 });
 
 t('应用：编号全部换新，和模板里的一个都不重', function () {
@@ -221,15 +224,17 @@ t('应用：勾选清零 —— 模板里勾完了的，搬过去全是未完成
   TaskOps.toggleTask(data, DATE, 'I', seeded.a.id, true);
   TaskOps.toggleItem(data, DATE, 'I', seeded.block.id, true); // 块内全勾
   var tpl = TaskOps.saveDayAsTemplate(data, DATE).template;
-  h.assertTrue(tpl.items.I[0].completed, '模板里存的是勾上的状态');
+  // 完成沉底（需求 6）：勾完的「晨练」沉到块之后，模板里 I[0]=块、I[1]=晨练
+  h.assertTrue(tpl.items.I[0].completed, '块存的是勾上的状态');
+  h.assertTrue(tpl.items.I[1].completed, '任务存的是勾上的状态');
 
   var TARGET = '2026-10-05';
   TaskOps.applyTemplate(data, TARGET, tpl.id);
   var day = data.dates[TARGET];
 
-  h.assertFalse(day.I[0].completed, '任务清零');
-  h.assertFalse(day.I[1].completed, '块清零');
-  h.assertFalse(day.I[1].tasks[0].completed, '块内任务清零');
+  h.assertFalse(day.I[0].completed, '块清零');
+  h.assertFalse(day.I[0].tasks[0].completed, '块内任务清零');
+  h.assertFalse(day.I[1].completed, '任务清零');
 });
 
 t('应用：slot 跟着模板走', function () {
@@ -354,7 +359,7 @@ t('序列化 → 解析 → normalize 往返不丢模板', function () {
 
   h.assertEqual(r.data.templates.length, 1);
   h.assertEqual(r.data.templates[0].items.I.length, 2);
-  h.assertEqual(r.data.templates[0].items.I[1].tasks.length, 1);
+  h.assertEqual(r.data.templates[0].items.I[0].tasks.length, 1);
 });
 
 t('归档收缩 dates 时模板跟着留下', function () {

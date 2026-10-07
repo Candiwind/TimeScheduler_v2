@@ -41,7 +41,7 @@ var Pdf = (function (CONFIG, Util, Store, Exporter) {
     var html = '<li class="print__task' +
       (task.completed ? ' print__task--done' : '') + '">' +
       '<span class="print__box">' + (task.completed ? '☑' : '☐') + '</span>' +
-      Util.escapeHtml(task.text);
+      (task.bonus === true ? '🎁 ' : '') + Util.escapeHtml(task.text);
 
     // 阶段缩进一层印在任务下面，和页面上看到的是同一个结构
     var stages = Array.isArray(task.stages) ? task.stages : [];
@@ -51,7 +51,7 @@ var Pdf = (function (CONFIG, Util, Store, Exporter) {
         html += '<li class="print__stage' +
           (stages[s].completed ? ' print__stage--done' : '') + '">' +
           '<span class="print__box">' + (stages[s].completed ? '☑' : '☐') + '</span>' +
-          Util.escapeHtml(stages[s].text) + '</li>';
+          (stages[s].bonus === true ? '🎁 ' : '') + Util.escapeHtml(stages[s].text) + '</li>';
       }
       html += '</ul>';
     }
@@ -85,7 +85,7 @@ var Pdf = (function (CONFIG, Util, Store, Exporter) {
     options = options || {};
     var dates = options.dateStr ? [options.dateStr] : Store.listDates(data);
 
-    var html = '<h1 class="print__title">四象限任务</h1>';
+    var html = '<h1 class="print__title">MyPal</h1>';
 
     if (!dates.length) {
       return html + '<p class="print__empty">（还没有任何数据）</p>';
@@ -97,6 +97,10 @@ var Pdf = (function (CONFIG, Util, Store, Exporter) {
 
       html += '<section class="print__day">';
       html += '<h2 class="print__date">' + Util.escapeHtml(dateStr) + '</h2>';
+
+      // 日报自动加入当日统计（需求 1）：复用 exporter.statsLine，不另算一套
+      html += '<p class="print__stats">' +
+        Util.escapeHtml(Exporter.statsLine(data, dateStr)) + '</p>';
 
       for (var q = 0; q < CONFIG.QUADRANTS.length; q++) {
         var quad = CONFIG.QUADRANTS[q];

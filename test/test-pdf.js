@@ -26,7 +26,8 @@ function build(spec) {
   for (var i = 0; i < keys.length; i++) {
     var parts = keys[i].split('|');   // '2026-10-01|I'
     var texts = spec[keys[i]];
-    for (var k = 0; k < texts.length; k++) {
+    // addTask 默认把新任务加在开头（需求 3），倒着加才能让最终顺序和 spec 一致
+    for (var k = texts.length - 1; k >= 0; k--) {
       var item = texts[k];
       var looksLikeTask = item !== null && typeof item === 'object';
       var r = TaskOps.addTask(data, parts[0], parts[1], looksLikeTask ? item.text : item);
@@ -42,7 +43,7 @@ function build(spec) {
 h.group('整体结构');
 
 t('有标题', function () {
-  h.assertTrue(Pdf.buildPrintHtml(Store.createEmpty()).indexOf('四象限任务') !== -1);
+  h.assertTrue(Pdf.buildPrintHtml(Store.createEmpty()).indexOf('MyPal') !== -1);
 });
 
 t('一天一段，四个象限齐全', function () {

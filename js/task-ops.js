@@ -176,10 +176,10 @@ var TaskOps = (function (CONFIG, Util, Store) {
   // -------------------------------------------------------------------------
 
   /**
-   * 新增一条任务，加到该象限列表的**末尾**。
+   * 新增一条任务，加到该象限列表的**开头**（需求 3）。
    *
-   * 为什么不插到开头：末尾是用户预期得到的位置 —— 新加的东西排在最后，
-   * 不会把已经排好的任务顺序挤乱（顺序是用户手动拖出来的，见 D-10）。
+   * 新加的东西排在最前，用户刚敲进去的任务一眼就能看到，不用滚到底下去找。
+   * 时间视图走同一条规矩（v2.5）：新增的条目也排在该时段最前。
    */
   function addTask(data, dateStr, quadrantId, text) {
     var bad = checkTarget(dateStr, quadrantId);
@@ -195,7 +195,7 @@ var TaskOps = (function (CONFIG, Util, Store) {
       createdAt: Date.now()
     };
 
-    Store.ensureDay(data, dateStr)[quadrantId].push(task);
+    Store.ensureDay(data, dateStr)[quadrantId].unshift(task);
     return { ok: true, task: task };
   }
 
@@ -230,22 +230,45 @@ var TaskOps = (function (CONFIG, Util, Store) {
     var stages = stagesOf(task);
 
     if (!stages.length) {
+      // 无阶段任务：它自己就是一个条目。Bonus 时 total 是 0（纯加分），
+      // done 照算（勾了就是 1），isComplete 就是它自己的 completed。
+      var isBonus = !!(task && task.bonus === true);
+      var plainDone = (task && task.completed) ? 1 : 0;
       return {
-        done: task && task.completed ? 1 : 0,
-        total: 1,
+        done: plainDone,
+        total: isBonus ? 0 : 1,
+        bonusDone: isBonus && plainDone ? 1 : 0,
+        bonusCount: isBonus ? 1 : 0,
         hasStages: false,
         isComplete: !!(task && task.completed)
       };
     }
 
+    // 有阶段：**完成率**口径（需求 2，v2.5 未动）——分母只计非 Bonus 阶段、
+    // 分子计全部（含 Bonus），所以完成率可以超过 100%。
+    //
+    // 「全完成」（isComplete）是**另一条**口径（v2.5 改）：每个阶段都勾完才算完成，
+    // Bonus 阶段没做就不算全完成。和 store.allDone、importer.copyTask 同一套。
     var done = 0;
+    var total = 0;
+    var bonusDone = 0;
+    var bonusCount = 0;
     for (var i = 0; i < stages.length; i++) {
-      if (stages[i].completed) done++;
+      var s = stages[i];
+      if (s.completed) done++;
+      if (s.bonus === true) {
+        bonusCount++;
+        if (s.completed) bonusDone++;
+      } else {
+        total++;
+      }
     }
 
     return {
       done: done,
-      total: stages.length,
+      total: total,
+      bonusDone: bonusDone,
+      bonusCount: bonusCount,
       hasStages: true,
       isComplete: done === stages.length
     };
@@ -264,17 +287,28 @@ var TaskOps = (function (CONFIG, Util, Store) {
     var tasks = blockTasks(item);
     var done = 0;
     var total = 0;
+    var bonusDone = 0;
+    var bonusCount = 0;
+    var allCount = 0;
     for (var i = 0; i < tasks.length; i++) {
       var p = getProgress(tasks[i]);
       done += p.done;
       total += p.total;
+      bonusDone += p.bonusDone || 0;
+      bonusCount += p.bonusCount || 0;
+      allCount += (p.total || 0) + (p.bonusCount || 0);
     }
+
+    // 全完成 = 块内每个最细单位都勾完（v2.5：Bonus 单位也算数）；空块不算完成
+    var isComplete = allCount > 0 && done === allCount;
 
     return {
       done: done,
       total: total,
+      bonusDone: bonusDone,
+      bonusCount: bonusCount,
       hasStages: true,   // 块头上总要显示 n/n，哪怕里面装的是普通任务
-      isComplete: total > 0 && done === total
+      isComplete: isComplete
     };
   }
 
@@ -370,12 +404,19 @@ var TaskOps = (function (CONFIG, Util, Store) {
     var found = findStage(located.task, stageId);
     if (!found) return fail(ERR.NOT_FOUND);
 
+    var wasComplete = getProgress(located.task).isComplete;
     found.stage.completed = (typeof completed === 'boolean')
       ? completed
       : !found.stage.completed;
 
     syncCompleted(located.task);
     syncHostBlock(data, dateStr, located.quadrantId, located.blockId);
+
+    // 阶段本身不沉底；但勾完最后一个阶段导致父任务转成「已完成」时，
+    // 父任务要沉底（需求 6 只豁免阶段，父任务仍是任务）
+    if (!wasComplete && getProgress(located.task).isComplete) {
+      sendCompletedToEnd(data, dateStr, located.quadrantId, located);
+    }
     return { ok: true, stage: found.stage };
   }
 
@@ -409,12 +450,18 @@ var TaskOps = (function (CONFIG, Util, Store) {
     var located = locateTask(data, dateStr, quadrantId, taskId);
     if (!located) return fail(ERR.NOT_FOUND);
 
+    var wasComplete = getProgress(located.task).isComplete;
     var stages = stagesOf(located.task);
     for (var i = 0; i < stages.length; i++) {
       stages[i].completed = !!completed;
     }
     syncCompleted(located.task);
     syncHostBlock(data, dateStr, located.quadrantId, located.blockId);
+
+    // 一键全勾导致父任务转成「已完成」时沉底（需求 6，同 toggleStage 口径）
+    if (!wasComplete && getProgress(located.task).isComplete) {
+      sendCompletedToEnd(data, dateStr, located.quadrantId, located);
+    }
 
     return { ok: true, task: located.task };
   }
@@ -493,8 +540,14 @@ var TaskOps = (function (CONFIG, Util, Store) {
       ? completed
       : !getProgress(task).isComplete;
 
+    var wasComplete = getProgress(task).isComplete;
     setUnitDone(task, target);
     syncHostBlock(data, dateStr, quadrantId, found.blockId);
+
+    // 完成沉底（需求 6）：只在「未完成 → 已完成」方向移动，取消勾选不移回
+    if (!wasComplete && getProgress(task).isComplete) {
+      sendCompletedToEnd(data, dateStr, quadrantId, found);
+    }
 
     return { ok: true, task: task };
   }
@@ -542,8 +595,8 @@ var TaskOps = (function (CONFIG, Util, Store) {
   // -------------------------------------------------------------------------
 
   /**
-   * 新建一个**空**任务块，加到该象限顶层的末尾（和 addTask 同一个位置逻辑：
-   * 新东西排最后，不挤乱用户排好的顺序）。
+   * 新建一个**空**任务块，加到该象限顶层的开头（和 addTask 同一个位置逻辑：
+   * 新东西排最前，用户刚建的块一眼就能看到）。
    */
   function addBlock(data, dateStr, quadrantId, text) {
     var bad = checkTarget(dateStr, quadrantId);
@@ -561,7 +614,7 @@ var TaskOps = (function (CONFIG, Util, Store) {
       tasks: []
     };
 
-    Store.ensureDay(data, dateStr)[quadrantId].push(block);
+    Store.ensureDay(data, dateStr)[quadrantId].unshift(block);
     return { ok: true, block: block };
   }
 
@@ -597,10 +650,18 @@ var TaskOps = (function (CONFIG, Util, Store) {
       ? completed
       : !progressOfItem(found.block).isComplete;
 
+    // 记下「未完成 → 已完成」转变的子任务，勾完后逐条沉底（需求 6）
+    var flipped = [];
     for (var i = 0; i < tasks.length; i++) {
+      var was = getProgress(tasks[i]).isComplete;
       setUnitDone(tasks[i], target);
+      if (!was && getProgress(tasks[i]).isComplete) flipped.push(tasks[i]);
     }
     syncBlockCompleted(found.block);
+
+    for (var j = 0; j < flipped.length; j++) {
+      sendCompletedToEnd(data, dateStr, quadrantId, { blockId: blockId, task: flipped[j] });
+    }
 
     return { ok: true, block: found.block };
   }
@@ -786,6 +847,62 @@ var TaskOps = (function (CONFIG, Util, Store) {
   }
 
   /**
+   * 在池里**任意位置**找一条条目：顶层任务 / 顶层任务块 / 块内任务。
+   * 需求（重命名后 4）：DDL 以任务为单位，块内任务也要能定位、改 DDL、删、改文字。
+   *
+   * 返回 { container: 'pool', index, item } 或
+   *      { container: 'block', block, index, item } 或 null。
+   */
+  function locatePoolItem(data, id) {
+    var pool = ensurePool(data);
+    for (var i = 0; i < pool.length; i++) {
+      if (pool[i].id === id) {
+        return { container: 'pool', index: i, item: pool[i] };
+      }
+      if (pool[i].type === 'block' && Array.isArray(pool[i].tasks)) {
+        var tasks = pool[i].tasks;
+        for (var j = 0; j < tasks.length; j++) {
+          if (tasks[j].id === id) {
+            return { container: 'block', block: pool[i], index: j, item: tasks[j] };
+          }
+        }
+      }
+    }
+    return null;
+  }
+
+  /**
+   * 在池里找一个**任务块**（块只存在于池顶层，规矩 1）。
+   * 返回 { index, block } 或 null。
+   */
+  function findPoolBlock(data, blockId) {
+    var pool = ensurePool(data);
+    for (var i = 0; i < pool.length; i++) {
+      if (pool[i].type === 'block' && pool[i].id === blockId) {
+        return { index: i, block: pool[i] };
+      }
+    }
+    return null;
+  }
+
+  /**
+   * 把池内一条条目从它现在所在的地方摘出来（顶层任务 / 顶层块 / 块内任务三类）。
+   * 块内任务摘出后宿主块完成度重算（和 removePoolItem 同一条规矩）。
+   *
+   * 收口成一个函数：`removePoolItem` / `restoreFromPool` / `movePoolItemTo`
+   * 三处都是「先摘出来、再决定放哪」，摘出这一步只该有一份实现
+   * （同类教训见 DS R-41）。
+   */
+  function detachPoolItem(data, found) {
+    if (found.container === 'block') {
+      found.block.tasks.splice(found.index, 1);
+      syncBlockCompleted(found.block);
+    } else {
+      ensurePool(data).splice(found.index, 1);
+    }
+  }
+
+  /**
    * 推迟：把一条任务从象限摘出来，压进池的**末尾**。
    * 文字、完成状态、阶段原样带走 —— 进池不是删除，什么都不丢。
    *
@@ -850,6 +967,10 @@ var TaskOps = (function (CONFIG, Util, Store) {
       // 和推迟任务同一个默认：所属日期 + 1 天
       plannedDate: Util.addDays(dateStr, 1)
     };
+    // 阶段是 Bonus 的话，推迟出来的池内任务也带着 Bonus（需求 2 的数据流转）
+    if (found.stage.bonus === true) pooled.bonus = true;
+    // 高亮同理：阶段标了黄，推迟出来的池内任务接着标（见 DS 2.40）
+    if (found.stage.highlight === true) pooled.highlight = true;
 
     // 从父任务里摘出去，走 removeStage 同一套收尾：
     // 删光阶段时 syncCompleted 一个字不动（状态停住，见 2.9），
@@ -865,23 +986,133 @@ var TaskOps = (function (CONFIG, Util, Store) {
   }
 
   /**
+   * 需求（重命名后 4）：把一个任务块**整体**推迟进计划池。
+   * 块连块内任务原样搬走，不拆散；和推迟单条任务同一条默认 ——
+   * 块内每条任务的完成时间默认设成所属日期 + 1 天（DDL 以任务为单位，
+   * 之后在池里可逐条改，见 DS 2.20）。
+   */
+  function postponeBlock(data, dateStr, quadrantId, blockId) {
+    var bad = checkTarget(dateStr, quadrantId);
+    if (bad) return fail(bad);
+
+    var found = findBlock(data, dateStr, quadrantId, blockId);
+    if (!found) return fail(ERR.NOT_FOUND);
+
+    var removed = found.block;
+    data.dates[dateStr][quadrantId].splice(found.index, 1);
+
+    // 推迟和删除一样会把某一天掏空 —— 空了就收掉
+    if (!Store.hasAnyTask(data, dateStr)) {
+      delete data.dates[dateStr];
+    }
+
+    // 默认完成时间逐条设到块内任务上（不是设在块上 —— 块只是分组容器）
+    var children = blockTasks(removed);
+    for (var i = 0; i < children.length; i++) {
+      children[i].plannedDate = Util.addDays(dateStr, 1);
+    }
+
+    ensurePool(data).push(removed);
+    return { ok: true, block: removed };
+  }
+
+  /**
+   * requirements（拖拽互通）第 3 条：把象限里的一条任务**拖**进计划池。
+   *
+   * 和 `postponeTask` 是同一种语义（从象限摘出、完成时间默认所属日期 + 1 天），
+   * 差别只在落点由拖拽指定：`toBlockId` 为 null 落池**顶层**，否则落进那个块的
+   * 任务列表；`toIndex` 口径和 moveTask 一致（以「摘出来之后」的列表为准）。
+   *
+   * 任务可能从象限顶层或某个块里被拖出来，所以用 `findTaskAnywhere` 定位
+   * （调用方只给「拖的是哪条」，不必告诉是哪个象限 —— 和 moveItem 同一条）。
+   */
+  function moveTaskToPool(data, dateStr, taskId, toBlockId, toIndex) {
+    if (!Util.isValidDateStr(dateStr)) return fail(ERR.BAD_DATE);
+
+    var found = findTaskAnywhere(data, dateStr, taskId);
+    if (!found) return fail(ERR.NOT_FOUND);
+
+    var dstBlock = null;
+    if (toBlockId) {
+      var blockFound = findPoolBlock(data, toBlockId);
+      if (!blockFound) return fail(ERR.NOT_FOUND);
+      dstBlock = blockFound.block;
+    }
+
+    // 摘出来（从块里拖出来 = 拖出块，不是删掉），宿主块完成度重算
+    if (found.blockId) {
+      var host = findBlock(data, dateStr, found.quadrantId, found.blockId);
+      if (!host) return fail(ERR.NOT_FOUND);
+      host.block.tasks.splice(found.index, 1);
+      syncBlockCompleted(host.block);
+    } else {
+      data.dates[dateStr][found.quadrantId].splice(found.index, 1);
+    }
+
+    // 和推迟一样会把某一天掏空 —— 空了就收掉
+    if (!Store.hasAnyTask(data, dateStr)) {
+      delete data.dates[dateStr];
+    }
+
+    // 推迟进池的默认完成时间：所属日期 + 1 天（和 postponeTask 同一条）
+    found.task.plannedDate = Util.addDays(dateStr, 1);
+
+    var list = dstBlock ? blockTasks(dstBlock) : ensurePool(data);
+    var idx = clampIndex(toIndex, list.length);
+    list.splice(idx, 0, found.task);
+    if (dstBlock) syncBlockCompleted(dstBlock);
+
+    return { ok: true, task: found.task, index: idx };
+  }
+
+  /**
+   * requirements（拖拽互通）第 3 条：把象限里的一个任务块**拖**进计划池顶层。
+   *
+   * 和 `postponeBlock` 同一条语义（整块原样搬走、不拆散，块内每条任务完成时间
+   * +1 天，块本体不设），差别只在落点由拖拽给出（`toIndex`），不再固定压到末尾。
+   * 块只能落在池顶层（块里不许套块，规矩 1）。
+   */
+  function moveBlockToPool(data, dateStr, blockId, toIndex) {
+    if (!Util.isValidDateStr(dateStr)) return fail(ERR.BAD_DATE);
+
+    var found = findBlockAnywhere(data, dateStr, blockId);
+    if (!found) return fail(ERR.NOT_FOUND);
+
+    data.dates[dateStr][found.quadrantId].splice(found.index, 1);
+    if (!Store.hasAnyTask(data, dateStr)) {
+      delete data.dates[dateStr];
+    }
+
+    var children = blockTasks(found.block);
+    for (var i = 0; i < children.length; i++) {
+      children[i].plannedDate = Util.addDays(dateStr, 1);
+    }
+
+    var pool = ensurePool(data);
+    var idx = clampIndex(toIndex, pool.length);
+    pool.splice(idx, 0, found.block);
+    return { ok: true, block: found.block, index: idx };
+  }
+
+  /**
    * 设定 / 修改 / 清除池内任务的完成时间（requirements 第 3 条：可修改）。
    * 传 'YYYY-MM-DD' 设定，传 null 清除（回到「未设定」——
    * 未设定的时间任务是**持续保留**的，不会被清掉或提醒）。
    */
   function setPoolDate(data, poolItemId, dateStr) {
-    var found = findPoolItem(data, poolItemId);
+    // 需求（重命名后 4）：DDL 以任务为单位，块内任务也要能定位到
+    var found = locatePoolItem(data, poolItemId);
     if (!found) return fail(ERR.NOT_FOUND);
 
     if (dateStr === null) {
-      delete found.task.plannedDate;
-      return { ok: true, task: found.task };
+      delete found.item.plannedDate;
+      return { ok: true, task: found.item };
     }
 
     if (!Util.isValidDateStr(dateStr)) return fail(ERR.BAD_DATE);
 
-    found.task.plannedDate = dateStr;
-    return { ok: true, task: found.task };
+    found.item.plannedDate = dateStr;
+    return { ok: true, task: found.item };
   }
 
   /**
@@ -908,6 +1139,286 @@ var TaskOps = (function (CONFIG, Util, Store) {
 
     ensurePool(data).push(task);
     return { ok: true, task: task };
+  }
+
+  /**
+   * 需求（重命名后 4）：计划池里直接**添加任务块**（空块，和象限里的空块一样，
+   * 任务后续往里加）。块是分组容器，自己不设 DDL；块内任务各自设 DDL。
+   */
+  function addPoolBlock(data, text) {
+    var clean = Util.cleanText(text);
+    if (!clean) return fail(ERR.EMPTY_TEXT);
+
+    var block = {
+      id: Util.genId(),
+      type: 'block',
+      text: clean,
+      completed: false,
+      createdAt: Date.now(),
+      tasks: []
+    };
+
+    ensurePool(data).push(block);
+    return { ok: true, block: block };
+  }
+
+  /**
+   * 需求（重命名后 4）：往池内某个任务块里加一条任务。
+   * 和手动加池任务同一条默认 —— 完成时间 = 当前查看日期 + 7 天。
+   */
+  function addPoolBlockTask(data, dateStr, blockId, text) {
+    if (!Util.isValidDateStr(dateStr)) return fail(ERR.BAD_DATE);
+
+    var clean = Util.cleanText(text);
+    if (!clean) return fail(ERR.EMPTY_TEXT);
+
+    var found = findPoolItem(data, blockId);
+    if (!found || found.task.type !== 'block') return fail(ERR.NOT_FOUND);
+
+    var task = {
+      id: Util.genId(),
+      text: clean,
+      completed: false,
+      createdAt: Date.now(),
+      plannedDate: Util.addDays(dateStr, 7)
+    };
+
+    var tasks = found.task.tasks;
+    if (!Array.isArray(tasks)) { tasks = []; found.task.tasks = tasks; }
+    tasks.push(task);
+    syncBlockCompleted(found.task);
+
+    return { ok: true, task: task, block: found.task };
+  }
+
+  /**
+   * v2.6 需求 1：池内换顺序（拖拽的数据那半边）。
+   *
+   * 语义 = 「**原地**换顺序」：落点就是这条现在所属的那个列表（顶层 at 顶层、
+   * 同一块内 at 同一块内），所以能拿它当「同列表排序」的窄入口。
+   * v2.10 需求 3 放开了池内跨容器搬运，那条走 movePoolItemTo —— 这里
+   * 就只是它的一层「按现状补全 toBlockId」的包装。
+   *
+   * toIndex 口径和 moveTask 完全一致（见 moveTask 的说明）：以「把这条
+   * 摘出来之后」的列表为准，0 = 最前，list.length = 最后（越界自动夹紧）。
+   */
+  function movePoolItem(data, poolItemId, toIndex) {
+    var found = locatePoolItem(data, poolItemId);
+    if (!found) return fail(ERR.NOT_FOUND);
+
+    return movePoolItemTo(data, poolItemId,
+                          found.container === 'block' ? found.block.id : null,
+                          toIndex);
+  }
+
+  /**
+   * requirements（拖拽互通）第 3 条：池内条目挪位置，**同列表换顺序与跨容器都走它**。
+   *
+   * `toBlockId` 为 null = 落到池**顶层**；否则落进那个块的任务列表。
+   * 池内跨容器（顶层 ↔ 块内）原来是明确不支持的（D-58），本版按需求
+   * 「象限里能做的拖动，池里也要能做」放开：象限里能把任务拖进 / 拖出块，
+   * 池里对应地也能。两端的宿主块都重算完成度（进出都改变块内完成数）。
+   *
+   * 块本体仍不能进块（块里不许套块，规矩 1），也不能把块拖进自己。
+   * `toIndex` 口径和 movePoolItem 一致（以「摘出来之后」的列表为准，越界夹紧）。
+   */
+  function movePoolItemTo(data, poolItemId, toBlockId, toIndex) {
+    var found = locatePoolItem(data, poolItemId);
+    if (!found) return fail(ERR.NOT_FOUND);
+
+    var dstBlock = null;
+    if (toBlockId) {
+      var blockFound = findPoolBlock(data, toBlockId);
+      if (!blockFound) return fail(ERR.NOT_FOUND);
+      dstBlock = blockFound.block;
+
+      // 块里的位置放不下另一个块，也放不下它自己
+      if (found.item === dstBlock || found.item.type === 'block') {
+        return fail(ERR.NOT_FOUND);
+      }
+    }
+
+    detachPoolItem(data, found);
+
+    var list = dstBlock ? blockTasks(dstBlock) : ensurePool(data);
+    var idx = clampIndex(toIndex, list.length);
+    list.splice(idx, 0, found.item);
+    if (dstBlock) syncBlockCompleted(dstBlock);
+
+    return { ok: true, task: found.item, index: idx };
+  }
+
+  /**
+   * v2.6 需求 3：一条池条目的「到期日」—— 自动导入拿它和今天比。
+   *
+   * - 普通任务（含阶段）：自己的 `plannedDate`；
+   * - 任务块：块内任务里**最早**的那个（块本体没有 `plannedDate`，见 D-51）。
+   *   取最早是「整块按该做的那天回来」；块内任务不单独到期，否则
+   *   `postponeBlock` 设下的「+1 天」会让块第二天就被掏空（见 2.32 / D-60）。
+   * - 取不到 / 脏数据 → null（当「未设定」，永远不到期，D-38）。
+   */
+  function poolItemDueDate(item) {
+    if (!item) return null;
+
+    if (item.type === 'block') {
+      var children = blockTasks(item);
+      var earliest = null;
+      for (var i = 0; i < children.length; i++) {
+        var d = children[i].plannedDate;
+        if (typeof d === 'string' && Util.isValidDateStr(d) &&
+            (earliest === null || d < earliest)) {
+          earliest = d;
+        }
+      }
+      return earliest;
+    }
+
+    var own = item.plannedDate;
+    return (typeof own === 'string' && Util.isValidDateStr(own)) ? own : null;
+  }
+
+  /**
+   * v2.6 需求 3：把「计划日期到了」的池内条目自动导入今天。
+   *
+   * - 到期判据：`dueDate <= todayStr` —— 过期没做的也算到期。
+   *   'YYYY-MM-DD' 定长，字符串的字典序就是日期序，直接比。
+   * - 只处理**池顶层**（任务 / 任务块），块内任务不单独触发：整块一起回来，
+   *   不拆散「整体推迟」的块（见 poolItemDueDate / D-60）。
+   * - 导入 = **移动**：从池里摘掉，按池内顺序整批放到今天 Q-II 的**开头**
+   *   （和象限「新增任务加在开头」同一条规矩）。所以重复调用天然幂等 ——
+   *   导过的条目已经不在池里了。
+   * - 一条都没有时**不建**今天的记录（不留空壳日期）。
+   *
+   * quadrantId 不传就用 CONFIG.IMPORT_QUADRANT（第二象限）。
+   */
+  function autoImportDuePoolItems(data, todayStr, quadrantId) {
+    var to = quadrantId || CONFIG.IMPORT_QUADRANT;
+    var bad = checkTarget(todayStr, to);
+    if (bad) return fail(bad);
+
+    var pool = ensurePool(data);
+    var due = [];
+
+    for (var i = 0; i < pool.length; i++) {
+      var dueDate = poolItemDueDate(pool[i]);
+      if (dueDate !== null && dueDate <= todayStr) due.push(pool[i]);
+    }
+    if (!due.length) return { ok: true, imported: 0, items: [] };
+
+    // 从池里摘掉。按对象身份找下标，不按下标批量删（避免删着删着错位）
+    for (var d = 0; d < due.length; d++) {
+      var at = pool.indexOf(due[d]);
+      if (at !== -1) pool.splice(at, 1);
+    }
+
+    // 整批插到今天 Q-II 的开头。不能逐条 unshift —— 那会把池内顺序倒过来
+    var day = Store.ensureDay(data, todayStr);
+    day[to] = due.concat(day[to]);
+
+    return { ok: true, imported: due.length, items: due };
+  }
+
+  // -------------------------------------------------------------------------
+  // 池内勾选与沉底（v2.7 需求 1：池内任务块对齐象限）
+  //
+  // 池里的条目和象限里的任务长得一样了，勾选也得是同一套口径：有阶段就设
+  // 全部阶段（setUnitDone）、完成态由阶段派生（syncCompleted）、勾完沉底。
+  // 「池里不画阶段」是界面的事，数据不能因此走另一套 —— 两条口径并存
+  // 是 v2.5 修过的那类病（见 D-56 / 2.34）。
+  // -------------------------------------------------------------------------
+
+  /**
+   * 池内条目沉底：移到**它所属的那个列表**的末尾。
+   *
+   * 所属列表 = 块内任务的宿主块 `tasks`，其余（顶层任务 / 顶层块）是 `data.pool`。
+   * 和象限的 `sendCompletedToEnd` 同一个形状，但池条目没有 `slot`，
+   * 所以不需要顺带沉时间视图的键。
+   */
+  function sendPoolCompletedToEnd(data, found) {
+    if (!found || !found.item) return;
+
+    var list = (found.container === 'block')
+      ? blockTasks(found.block)
+      : ensurePool(data);
+
+    var idx = list.indexOf(found.item);
+    if (idx === -1 || idx === list.length - 1) return;   // 找不到或已在最后
+    list.splice(idx, 1);
+    list.push(found.item);
+  }
+
+  /**
+   * v2.7 需求 1：勾选池内一个**任务块** —— 块内所有任务（连同阶段）设成同一状态。
+   * 和象限 `toggleBlock` 同一套骨架，区别只在定位方式：池内块没有日期，
+   * 靠 `findPoolItem`（块只存在于池顶层，和象限「块只在顶层」是同一条规矩）。
+   *
+   * 取反看块现在是不是全完成；空块设了也无效果（`syncBlockCompleted` 对空块恒 false）。
+   */
+  function togglePoolBlock(data, blockId, completed) {
+    var found = findPoolItem(data, blockId);
+    if (!found || !isBlock(found.task)) return fail(ERR.NOT_FOUND);
+
+    var block = found.task;
+    var tasks = blockTasks(block);
+    var target = (typeof completed === 'boolean')
+      ? completed
+      : !progressOfItem(block).isComplete;
+
+    // 记下「未完成 → 已完成」转变的子任务，勾完后逐条沉底（和 toggleBlock 一样）
+    var flipped = [];
+    for (var i = 0; i < tasks.length; i++) {
+      var was = getProgress(tasks[i]).isComplete;
+      setUnitDone(tasks[i], target);
+      if (!was && getProgress(tasks[i]).isComplete) flipped.push(tasks[i]);
+    }
+    syncBlockCompleted(block);
+
+    for (var j = 0; j < flipped.length; j++) {
+      sendPoolCompletedToEnd(data, {
+        container: 'block', block: block, item: flipped[j]
+      });
+    }
+
+    return { ok: true, block: block };
+  }
+
+  /**
+   * v2.7 需求 1：勾选池内一个条目。
+   *
+   * 给的是**块** id 就转给 `togglePoolBlock`（和象限 `toggleItem` 一样只留一个
+   * 入口，调用方不必先判类型）；给的是任务 → 走下面：
+   *
+   * - 取反看「全完成」（有阶段时是所有阶段都勾完）；
+   * - `setUnitDone` 设状态 —— **有阶段就设全部阶段**，池里看不见阶段不代表
+   *   可以只改父级的 `completed`（那会让派生的 `completed` 和阶段对不上，
+   *   导入 / 统计 / 另一处渲染全跟着错）；
+   * - 在块内时宿主块重算一次完成状态（规矩 2）；
+   * - 「未完成 → 已完成」才沉底，取消勾选不移回（D-47 同一条规矩）。
+   */
+  function togglePoolItem(data, poolItemId, completed) {
+    var blockFound = findPoolItem(data, poolItemId);
+    if (blockFound && isBlock(blockFound.task)) {
+      return togglePoolBlock(data, poolItemId, completed);
+    }
+
+    var located = locatePoolItem(data, poolItemId);
+    if (!located) return fail(ERR.NOT_FOUND);
+
+    var item = located.item;
+    var target = (typeof completed === 'boolean')
+      ? completed
+      : !getProgress(item).isComplete;
+
+    var wasComplete = getProgress(item).isComplete;
+    setUnitDone(item, target);
+
+    if (located.container === 'block') syncBlockCompleted(located.block);
+
+    if (!wasComplete && getProgress(item).isComplete) {
+      sendPoolCompletedToEnd(data, located);
+    }
+
+    return { ok: true, task: item };
   }
 
   // -------------------------------------------------------------------------
@@ -960,6 +1471,117 @@ var TaskOps = (function (CONFIG, Util, Store) {
     return { ok: true, stage: found.stage, task: located.task };
   }
 
+  // -------------------------------------------------------------------------
+  // Bonus（需求 2）：任务 / 阶段标记为「额外加分」，图标礼品。
+  //
+  // Bonus 是**最细可勾选单位**的属性（和 slot 的「谁可以有时段」同口径）：
+  // 无阶段的任务本体、或阶段可以标；带阶段的任务本体没有 Bonus（阶段各自标），
+  // 块本体没有 Bonus（块是容器）。完成率口径见 getProgress / getStats。
+  // -------------------------------------------------------------------------
+
+  /** 设定 / 清除一条任务的 Bonus（只在**没有阶段**的任务上有意义） */
+  function setBonus(data, dateStr, quadrantId, taskId, bonus) {
+    var located = locateTask(data, dateStr, quadrantId, taskId);
+    if (!located) return fail(ERR.NOT_FOUND);
+
+    if (bonus) located.task.bonus = true;
+    else delete located.task.bonus;
+
+    // 块内任务标 / 取消 Bonus 会改块的完成度分母（规矩 2：块状态派生）
+    syncHostBlock(data, dateStr, located.quadrantId, located.blockId);
+    return { ok: true, task: located.task };
+  }
+
+  /** 设定 / 清除一条阶段的 Bonus */
+  function setStageBonus(data, dateStr, quadrantId, taskId, stageId, bonus) {
+    var located = locateTask(data, dateStr, quadrantId, taskId);
+    if (!located) return fail(ERR.NOT_FOUND);
+
+    var found = findStage(located.task, stageId);
+    if (!found) return fail(ERR.NOT_FOUND);
+
+    if (bonus) found.stage.bonus = true;
+    else delete found.stage.bonus;
+
+    syncCompleted(located.task);
+    syncHostBlock(data, dateStr, located.quadrantId, located.blockId);
+    return { ok: true, stage: found.stage, task: located.task };
+  }
+
+  // -------------------------------------------------------------------------
+  // 高亮（requirements 最新一条，见 DS 2.40）
+  //
+  // 「高亮」= 给**一整条**（任务的整段文字 / 阶段的整段文字 / 任务块的块名）
+  // 加浅橙色底色，界面上用**连续双击**切换。它是最细可勾选单位的属性，
+  // 和 bonus 同一档：无阶段任务本体、阶段、块本体都可以标。
+  //
+  // 和 bonus / slot 的两点不同，都是故意的：
+  //   1. 可选布尔字段，**不参与任何计算** —— 完成率、全完成、排序一概不看它，
+  //      所以这些 set 函数不需要 syncCompleted / syncHostBlock（那两位是给
+  //      「改了分母」的字段收尾的，高亮不改分母）；
+  //   2. 高亮**不传染**：标了块不等于标了块内任务，反之亦然。
+  //
+  // 存储上走 optional 字段 + 只有 true 才置（老备份照常读，见 store.normalizeTask）。
+  // -------------------------------------------------------------------------
+
+  /** 设定 / 清除一条任务整体的高亮 */
+  function setHighlight(data, dateStr, quadrantId, taskId, highlight) {
+    var located = locateTask(data, dateStr, quadrantId, taskId);
+    if (!located) return fail(ERR.NOT_FOUND);
+
+    if (highlight) located.task.highlight = true;
+    else delete located.task.highlight;
+
+    return { ok: true, task: located.task };
+  }
+
+  /** 设定 / 清除一条阶段的高亮 */
+  function setStageHighlight(data, dateStr, quadrantId, taskId, stageId, highlight) {
+    var located = locateTask(data, dateStr, quadrantId, taskId);
+    if (!located) return fail(ERR.NOT_FOUND);
+
+    var found = findStage(located.task, stageId);
+    if (!found) return fail(ERR.NOT_FOUND);
+
+    if (highlight) found.stage.highlight = true;
+    else delete found.stage.highlight;
+
+    return { ok: true, stage: found.stage, task: located.task };
+  }
+
+  /** 设定 / 清除一个任务块的高亮（标的是块头，块内任务不受影响） */
+  function setBlockHighlight(data, dateStr, quadrantId, blockId, highlight) {
+    var bad = checkTarget(dateStr, quadrantId);
+    if (bad) return fail(bad);
+
+    var found = findBlock(data, dateStr, quadrantId, blockId);
+    if (!found) return fail(ERR.NOT_FOUND);
+
+    if (highlight) found.block.highlight = true;
+    else delete found.block.highlight;
+
+    return { ok: true, block: found.block };
+  }
+
+  /**
+   * 设定 / 清除**计划池**里一条条目的高亮：顶层任务 / 顶层块 / 块内任务都认
+   * （locatePoolItem 三条路都覆盖）。
+   *
+   * 为什么池也要有：推迟是「同一个对象搬位置」（见本文件 计划池 段首），
+   * 一条在象限里标了黄的任务被推迟之后，如果不认、不画，看着就像高亮丢了。
+   */
+  function setPoolHighlight(data, poolItemId, highlight) {
+    if (typeof poolItemId !== 'string' || !poolItemId) return fail(ERR.NOT_FOUND);
+
+    var located = locatePoolItem(data, poolItemId);
+    if (!located) return fail(ERR.NOT_FOUND);
+
+    if (highlight) located.item.highlight = true;
+    else delete located.item.highlight;
+
+    return { ok: true, item: located.item };
+  }
+
   /**
    * 时间视图的分组（DS 2.13）：把当天设了时段的任务 / 阶段按时段归堆。
    *
@@ -1008,7 +1630,9 @@ var TaskOps = (function (CONFIG, Util, Store) {
                     quadrantId: qid,
                     text: stage.text,
                     parentText: task.text,
-                    completed: stage.completed
+                    completed: stage.completed,
+                    bonus: stage.bonus === true,
+                    highlight: stage.highlight === true
                   });
                 }
               }
@@ -1020,7 +1644,9 @@ var TaskOps = (function (CONFIG, Util, Store) {
                 quadrantId: qid,
                 text: task.text,
                 parentText: null,
-                completed: task.completed
+                completed: task.completed,
+                bonus: task.bonus === true,
+                highlight: task.highlight === true
               });
             }
           }
@@ -1028,57 +1654,246 @@ var TaskOps = (function (CONFIG, Util, Store) {
       }
     }
 
+    var tv = (day && day.tv) ? day.tv : null;
     var out = [];
     for (var m = 0; m < CONFIG.SLOTS.length; m++) {
       var slot = CONFIG.SLOTS[m];
       if (bySlot[slot] && bySlot[slot].length) {
-        out.push({ slot: slot, items: bySlot[slot] });
+        var items = bySlot[slot];
+        // 时间视图顺序记忆（需求 3，v2.5）：有记忆就按记忆排；不在记忆里的
+        // 条目（多半是刚新增、刚设了时段的）排在最前 —— 和象限视图
+        // 「新任务加在开头」同一条规矩。
+        if (tv && Array.isArray(tv[slot]) && tv[slot].length) {
+          items = orderByKeys(items, tv[slot]);
+        }
+        out.push({ slot: slot, items: items });
       }
     }
     return out;
   }
 
+  /** 时间视图条目的顺序键（需求 3）：阶段 = s:任务:阶段，任务 = t:任务 */
+  function timeKey(kind, taskId, stageId) {
+    return kind === 'stage' ? 's:' + taskId + ':' + stageId : 't:' + taskId;
+  }
+
   /**
-   * 把池里的一条任务放回某个象限。
+   * 按键列表排条目：键列表里有的按它的顺序排，没有的**排最前**（v2.5：
+   * 新任务排最前）。稳定排序保证没有键的那些之间仍保持原扫描顺序，
+   * 而扫描顺序里新增任务本来就在最前。
+   */
+  function orderByKeys(items, keys) {
+    var rank = {};
+    for (var i = 0; i < keys.length; i++) rank[keys[i]] = i;
+    var result = items.slice();
+    result.sort(function (a, b) {
+      var ra = rank[timeKey(a.kind, a.taskId, a.stageId)];
+      var rb = rank[timeKey(b.kind, b.taskId, b.stageId)];
+      if (ra === undefined) ra = -1;   // 没记忆的排最前
+      if (rb === undefined) rb = -1;
+      return ra - rb;
+    });
+    return result;
+  }
+
+  /** 重建某时段当前的完整键列表（从 getTimeView 现算，键一定齐全） */
+  function buildSlotKeys(data, dateStr, slot) {
+    var groups = getTimeView(data, dateStr);
+    for (var i = 0; i < groups.length; i++) {
+      if (groups[i].slot === slot) {
+        var keys = [];
+        for (var k = 0; k < groups[i].items.length; k++) {
+          var it = groups[i].items[k];
+          keys.push(timeKey(it.kind, it.taskId, it.stageId));
+        }
+        return keys;
+      }
+    }
+    return [];
+  }
+
+  /** 把某键从其它时段的顺序记忆里清掉（防跨时段拖拽后留残影） */
+  function pruneTimeKey(data, dateStr, key, exceptSlot) {
+    var day = data.dates[dateStr];
+    if (!day || !day.tv) return;
+    for (var s = 0; s < CONFIG.SLOTS.length; s++) {
+      var slot = CONFIG.SLOTS[s];
+      if (slot === exceptSlot) continue;
+      var list = day.tv[slot];
+      if (!Array.isArray(list)) continue;
+      var idx = list.indexOf(key);
+      if (idx !== -1) list.splice(idx, 1);
+      if (!list.length) delete day.tv[slot];
+    }
+  }
+
+  /** 把某时段里的某个键沉到末尾；该时段还没有记忆就先建完整键列表再沉 */
+  function sinkTimeKey(data, dateStr, slot, key) {
+    if (typeof slot !== 'string' || CONFIG.SLOTS.indexOf(slot) === -1) return;
+    var day = data.dates[dateStr];
+    if (!day) return;
+    if (!day.tv) day.tv = {};
+
+    var list = day.tv[slot];
+    if (!Array.isArray(list)) {
+      list = buildSlotKeys(data, dateStr, slot); // 完整列表，键一定在里面
+    }
+    var idx = list.indexOf(key);
+    if (idx !== -1) {
+      list.splice(idx, 1);
+      list.push(key);
+    }
+    day.tv[slot] = list;
+  }
+
+  /**
+   * 时间视图里的拖拽落地（需求 3，drag.js → app.js → 这里）。
+   *
+   * info: { dataKind: 'task'|'stage', taskId, stageId, quadrantId, toSlot, index }
+   * index 口径和 moveTask 一致：以「把这条摘出来之后」的列表为准。
+   * 跨时段拖拽顺带把 slot 改掉（复用 setSlot / setStageSlot 的校验）。
+   */
+  function moveTimeViewItem(data, dateStr, info) {
+    if (!info) return fail(ERR.NOT_FOUND);
+    if (!Util.isValidDateStr(dateStr)) return fail(ERR.BAD_DATE);
+    if (info.dataKind !== 'task' && info.dataKind !== 'stage') return fail(ERR.NOT_FOUND);
+    if (typeof info.toSlot !== 'string' || CONFIG.SLOTS.indexOf(info.toSlot) === -1) {
+      return fail(ERR.BAD_SLOT);
+    }
+    if (CONFIG.QUADRANT_IDS.indexOf(info.quadrantId) === -1) return fail(ERR.BAD_QUADRANT);
+
+    var located = locateTask(data, dateStr, info.quadrantId, info.taskId);
+    if (!located) return fail(ERR.NOT_FOUND);
+
+    var key;
+    if (info.dataKind === 'stage') {
+      var found = findStage(located.task, info.stageId);
+      if (!found) return fail(ERR.NOT_FOUND);
+      key = timeKey('stage', info.taskId, info.stageId);
+    } else {
+      key = timeKey('task', info.taskId, null);
+    }
+
+    // 跨时段：先改 slot（复用既有校验与错误码）
+    if (info.dataKind === 'stage') {
+      var set = setStageSlot(data, dateStr, info.quadrantId, info.taskId, info.stageId, info.toSlot);
+      if (!set.ok) return set;
+    } else {
+      var set2 = setSlot(data, dateStr, info.quadrantId, info.taskId, info.toSlot);
+      if (!set2.ok) return set2;
+    }
+
+    var day = Store.ensureDay(data, dateStr);
+
+    // 重建目标时段的完整键列表（此刻已含刚改完 slot 的这条），摘出再插回
+    var keys = buildSlotKeys(data, dateStr, info.toSlot);
+    var from = keys.indexOf(key);
+    if (from !== -1) keys.splice(from, 1);
+
+    var idx = clampIndex(info.index, keys.length);
+    keys.splice(idx, 0, key);
+
+    if (!day.tv) day.tv = {};
+    day.tv[info.toSlot] = keys;
+    pruneTimeKey(data, dateStr, key, info.toSlot);
+
+    return { ok: true, slot: info.toSlot, index: idx, key: key };
+  }
+
+  // -------------------------------------------------------------------------
+  // 完成沉底（需求 6）：任务勾选完成后自动排到同组最后（数据搬移，非渲染排序，
+  // 见 DS 2.18 / D-46）。阶段不沉底；块本体不沉底；取消勾选不自动移回。
+  // -------------------------------------------------------------------------
+
+  /**
+   * 把某条任务移到它所在列表（顶层象限列表或块内 tasks）的末尾，
+   * 并同步把时间视图里对应时段的键沉底（无阶段任务才有时段键）。
+   */
+  function sendCompletedToEnd(data, dateStr, quadrantId, found) {
+    if (!found || !found.task) return;
+
+    var list;
+    if (found.blockId) {
+      var host = findBlock(data, dateStr, quadrantId, found.blockId);
+      if (!host) return;
+      list = blockTasks(host.block);
+    } else {
+      var qList = data.dates[dateStr] && data.dates[dateStr][quadrantId];
+      if (!Array.isArray(qList)) return;
+      list = qList;
+    }
+
+    var idx = list.indexOf(found.task);
+    if (idx === -1 || idx === list.length - 1) return; // 找不到或已在最后
+    list.splice(idx, 1);
+    list.push(found.task);
+
+    if (!stagesOf(found.task).length && found.task.slot) {
+      sinkTimeKey(data, dateStr, found.task.slot, 't:' + found.task.id);
+    }
+  }
+
+  /**
+   * 把池里的一条任务放回某个象限。池内**块里的任务**也能放回 ——
+   * 界面上它就是一条可拖的池条目，拖回时从宿主块里摘出来，宿主块完成度重算
+   * （和 removePoolItem / postponeTask 穿透块是同一条规矩）。
    *
    * toIndex 口径和 moveTask 一致（以插入后的合法下标为准，越界夹紧）：
-   * 拖拽回来时带上占位符承诺的位置；不带 toIndex 就排末尾 ——
-   * 和 addTask 同一个位置逻辑，不挤乱用户排好的顺序。
+   * 拖拽回来时带上占位符承诺的位置；不带 toIndex 就排末尾 —— 回象限是按
+   * 占位符落位，不走 addTask 的「加在开头」。
+   *
+   * `toBlockId`（requirements 拖拽互通第 3 条）：落进那个**象限块**的块内列表，
+   * 而不是象限顶层。池里的任务拖进象限的块里是这个入口；块本体（`type:'block'`）
+   * 仍只能落顶层 —— 块里不许套块（规矩 1），落进块时目标块完成度重算。
    */
-  function restoreFromPool(data, dateStr, quadrantId, poolItemId, toIndex) {
+  function restoreFromPool(data, dateStr, quadrantId, poolItemId, toIndex, toBlockId) {
     var bad = checkTarget(dateStr, quadrantId);
     if (bad) return fail(bad);
 
-    var found = findPoolItem(data, poolItemId);
+    var found = locatePoolItem(data, poolItemId);
     if (!found) return fail(ERR.NOT_FOUND);
 
-    ensurePool(data).splice(found.index, 1);
+    var dstBlock = null;
+    if (toBlockId) {
+      var blockFound = findBlockAnywhere(data, dateStr, toBlockId);
+      if (!blockFound) return fail(ERR.NOT_FOUND);
+      if (found.item.type === 'block') return fail(ERR.NOT_FOUND);
+      dstBlock = blockFound.block;
+    }
 
-    var target = Store.ensureDay(data, dateStr)[quadrantId];
+    detachPoolItem(data, found);
+
+    var target = dstBlock
+      ? blockTasks(dstBlock)
+      : Store.ensureDay(data, dateStr)[quadrantId];
     var idx = clampIndex(toIndex, target.length);
-    target.splice(idx, 0, found.task);
-    return { ok: true, task: found.task, quadrantId: quadrantId, index: idx };
+    target.splice(idx, 0, found.item);
+    if (dstBlock) syncBlockCompleted(dstBlock);
+    return { ok: true, task: found.item, quadrantId: quadrantId, index: idx };
   }
 
-  /** 从池里删除一条。和象限里的删除一样：直接删，没有回收站 */
+  /**
+   * 从池里删除一条。顶层任务 / 顶层块（连块内任务一起）/ 块内任务都能删；
+   * 块内任务删掉后宿主块重算一次完成状态。和象限里的删除一样：直接删，没有回收站。
+   */
   function removePoolItem(data, poolItemId) {
-    var found = findPoolItem(data, poolItemId);
+    var found = locatePoolItem(data, poolItemId);
     if (!found) return fail(ERR.NOT_FOUND);
 
-    ensurePool(data).splice(found.index, 1);
-    return { ok: true, task: found.task };
+    detachPoolItem(data, found);
+    return { ok: true, task: found.item };
   }
 
-  /** 改池内任务的文字。改空拒绝、原文保留（和 D-31 同一条规矩） */
+  /** 改池内任务的文字。改空拒绝、原文保留（和 D-31 同一条规矩）；块内任务也能改 */
   function editPoolItem(data, poolItemId, text) {
-    var found = findPoolItem(data, poolItemId);
+    var found = locatePoolItem(data, poolItemId);
     if (!found) return fail(ERR.NOT_FOUND);
 
     var clean = Util.cleanText(text);
     if (!clean) return fail(ERR.EMPTY_TEXT);
 
-    found.task.text = clean;
-    return { ok: true, task: found.task };
+    found.item.text = clean;
+    return { ok: true, task: found.item };
   }
 
   // -------------------------------------------------------------------------
@@ -1193,11 +2008,18 @@ var TaskOps = (function (CONFIG, Util, Store) {
           createdAt: Date.now()
         };
         if (src.stages[i].slot) stage.slot = src.stages[i].slot;
+        if (src.stages[i].bonus === true) stage.bonus = true;
+        if (src.stages[i].highlight === true) stage.highlight = true;
         task.stages.push(stage);
       }
     }
     if (src.slot) task.slot = src.slot;
     if (src.plannedDate) task.plannedDate = src.plannedDate;
+    // Bonus 是「最细单位」的属性：无阶段任务本体才有；带阶段任务本体忽略
+    if (src.bonus === true && !task.stages) task.bonus = true;
+    // 高亮照抄，但**不跟 stages 挂钩**：双击的是任务行那段文字，
+    // 阶段在下面单独一块 —— 带阶段的任务本体照样可以标黄（见 DS 2.40）
+    if (src.highlight === true) task.highlight = true;
     return task;
   }
 
@@ -1215,6 +2037,8 @@ var TaskOps = (function (CONFIG, Util, Store) {
       for (var i = 0; i < children.length; i++) {
         block.tasks.push(applyTaskCopy(children[i]));
       }
+      // 块头的高亮照抄（高亮不传染：块内任务各自的 highlight 在上面各走各的）
+      if (src.highlight === true) block.highlight = true;
       return block;
     }
     return applyTaskCopy(src);
@@ -1282,6 +2106,8 @@ var TaskOps = (function (CONFIG, Util, Store) {
     var day = Store.getDayTasks(data, dateStr);
     var total = 0;
     var done = 0;
+    var bonusCount = 0;
+    var bonusDone = 0;
 
     for (var i = 0; i < CONFIG.QUADRANT_IDS.length; i++) {
       var list = day[CONFIG.QUADRANT_IDS[i]];
@@ -1291,14 +2117,301 @@ var TaskOps = (function (CONFIG, Util, Store) {
         var progress = progressOfItem(list[k]);
         total += progress.total;
         done += progress.done;
+        bonusCount += progress.bonusCount || 0;
+        bonusDone += progress.bonusDone || 0;
       }
     }
 
+    // 完成率（需求 2）：分母只计非 Bonus（total），分子计全部（done，含 Bonus），
+    // 所以可超过 100%；全 Bonus（total===0）退化为「已完成 Bonus / 全部 Bonus」；
+    // 一条都没有时 null（交给渲染显示「—」）。
+    var den = total > 0 ? total : bonusCount;
     return {
       done: done,
       total: total,
-      remaining: total - done,
-      rate: total === 0 ? null : done / total
+      bonusCount: bonusCount,
+      bonusDone: bonusDone,
+      remaining: total - (done - bonusDone),
+      rate: den === 0 ? null : done / den
+    };
+  }
+
+  // -------------------------------------------------------------------------
+  // 搜索过滤（需求 3）：纯只读变换，过滤的是「画出来的那份」，数据一个字不动
+  // -------------------------------------------------------------------------
+
+  /** 关键词命中：小写化后做子串匹配（空关键词由调用方拦掉，这里不兜） */
+  function keywordHit(text, kw) {
+    return String(text || '').toLowerCase().indexOf(kw) !== -1;
+  }
+
+  /** 一条任务是否命中：任务文字命中，或任一阶段文字命中（阶段命中要保住宿主任务） */
+  function taskHitsKeyword(task, kw) {
+    if (keywordHit(task && task.text, kw)) return true;
+    var stages = stagesOf(task);
+    for (var i = 0; i < stages.length; i++) {
+      if (keywordHit(stages[i].text, kw)) return true;
+    }
+    return false;
+  }
+
+  /**
+   * 按关键词过滤一天的四象限内容（需求 3）。
+   *
+   * 返回一份**新对象**（不改动传入的 day）：
+   *   - 普通任务：命中才留下（任务文字或任一阶段文字命中）；
+   *   - 任务块：块名命中 → 整块连所有子任务留下；
+   *             块名不中、有子任务命中 → 留下只含命中子任务的块副本；
+   *             都不中 → 整个块消失。
+   * 没命中的象限就是空数组 —— 渲染出来就是那个象限的空白态。
+   */
+  function filterDayByKeyword(day, keyword) {
+    var out = { I: [], II: [], III: [], IV: [] };
+    if (!day) return out;
+
+    var kw = String(keyword || '').trim().toLowerCase();
+    var quadIds = ['I', 'II', 'III', 'IV'];
+    if (!kw) {
+      // 空关键词 = 不过滤，浅拷贝一份返回（调用方拿到的始终是新对象）
+      for (var q0 = 0; q0 < quadIds.length; q0++) {
+        var src0 = day[quadIds[q0]];
+        out[quadIds[q0]] = Array.isArray(src0) ? src0.slice() : [];
+      }
+      return out;
+    }
+
+    for (var qi = 0; qi < quadIds.length; qi++) {
+      var list = Array.isArray(day[quadIds[qi]]) ? day[quadIds[qi]] : [];
+      for (var i = 0; i < list.length; i++) {
+        var item = list[i];
+        if (isBlock(item)) {
+          if (keywordHit(item.text, kw)) {
+            out[quadIds[qi]].push(item);   // 块名命中：整块保留（共享引用，只读展示）
+            continue;
+          }
+          var kids = [];
+          var tasks = blockTasks(item);
+          for (var k = 0; k < tasks.length; k++) {
+            if (taskHitsKeyword(tasks[k], kw)) kids.push(tasks[k]);
+          }
+          if (kids.length) {
+            // 只留命中子任务的块副本 —— 不能改原块，过滤只是「画的时候少画」
+            var copy = {
+              id: item.id,
+              type: 'block',
+              text: item.text,
+              completed: item.completed,
+              createdAt: item.createdAt,
+              tasks: kids
+            };
+            // 副本是逐字段挑的（不是浅拷贝），可选的显示类字段要自己带上，
+            // 否则一进搜索模式块头的高亮就没了（见 DS 2.40）
+            if (item.highlight === true) copy.highlight = true;
+            out[quadIds[qi]].push(copy);
+          }
+        } else if (taskHitsKeyword(item, kw)) {
+          out[quadIds[qi]].push(item);
+        }
+      }
+    }
+    return out;
+  }
+
+  /**
+   * 按关键词过滤时间视图分组（需求 3）。
+   * 组（时段块）全部保留，只是组内只留下命中的条目 ——
+   * 没命中的时段块显示空白，和象限「没命中的象限显示空白」同一条约定。
+   * 条目命中看条目文字；阶段条目顺带看它所属任务的标注文字（parentText）。
+   */
+  function filterTimeViewByKeyword(groups, keyword) {
+    var kw = String(keyword || '').trim().toLowerCase();
+    if (!kw) return groups;
+
+    var out = [];
+    var list = Array.isArray(groups) ? groups : [];
+    for (var i = 0; i < list.length; i++) {
+      var items = [];
+      var src = Array.isArray(list[i].items) ? list[i].items : [];
+      for (var k = 0; k < src.length; k++) {
+        if (keywordHit(src[k].text, kw) || keywordHit(src[k].parentText, kw)) {
+          items.push(src[k]);
+        }
+      }
+      out.push({ slot: list[i].slot, items: items });
+    }
+    return out;
+  }
+
+  // -------------------------------------------------------------------------
+  // 阅读栏（v2.8 需求 2，见 DS 2.37）
+  // -------------------------------------------------------------------------
+
+  /**
+   * 拿到阅读栏那张表，缺了就补上。
+   *
+   * 读老数据 / 导入老 JSON 时 reading 字段可能不存在（normalize 会补，但
+   * 直接拿着手写对象调数据层的测试和上层调用不一定走 normalize），
+   * 所以每个写函数进门都先过这一道，不在别处假设它一定在。
+   */
+  function ensureReading(data) {
+    if (!data.reading || typeof data.reading !== 'object') {
+      data.reading = { active: [], done: [] };
+    }
+    if (!Array.isArray(data.reading.active)) data.reading.active = [];
+    if (!Array.isArray(data.reading.done)) data.reading.done = [];
+    return data.reading;
+  }
+
+  /**
+   * 按 id 找一条阅读条目，返回 { item, list, done }。
+   * done 标记它在「已读完成」那张表里 —— 取消完成时要靠它决定搬回哪边。
+   */
+  function findReadingItem(data, readingItemId) {
+    var reading = ensureReading(data);
+    var tables = [['active', false], ['done', true]];
+    for (var t = 0; t < tables.length; t++) {
+      var list = reading[tables[t][0]];
+      for (var i = 0; i < list.length; i++) {
+        if (list[i].id === readingItemId) {
+          return { item: list[i], list: list, done: tables[t][1] };
+        }
+      }
+    }
+    return null;
+  }
+
+  /**
+   * 往「正在阅读」加一条。
+   *
+   * startDate 不传 / 非法 → 取**今天**（需求「可以自己设置起始时间」，没设时
+   * 按「今天开始读」算，总比留一个空着好看）。文本去空白后为空就拒绝 ——
+   * 和任务同一条规矩。
+   *
+   * 时间是**日期**不是时分（需求：阅读板块的时间指的是日期），只收
+   * 'YYYY-MM-DD'；老数据里的 'HH:MM' 由清洗层兜着（见 Util.isValidReadingStamp），
+   * 写操作不放宽。
+   */
+  function addReadingItem(data, text, startDate) {
+    var name = Util.cleanText(text);
+    if (!name) return fail(ERR.EMPTY_TEXT);
+
+    if (startDate !== undefined && startDate !== null && startDate !== '' &&
+        !Util.isValidDateStr(startDate)) {
+      return fail(ERR.BAD_DATE);
+    }
+
+    var item = {
+      id: Util.genId(),
+      text: name,
+      start: Util.isValidDateStr(startDate) ? startDate : Util.todayStr(),
+      doneAt: null,
+      createdAt: Date.now()
+    };
+    ensureReading(data).active.push(item);
+    return { ok: true, item: item };
+  }
+
+  /** 改书名 / 事项名（改空了拒绝，保留原名 —— 和任务同款） */
+  function editReadingItem(data, readingItemId, text) {
+    var found = findReadingItem(data, readingItemId);
+    if (!found) return fail(ERR.NOT_FOUND);
+
+    var name = Util.cleanText(text);
+    if (!name) return fail(ERR.EMPTY_TEXT);
+
+    found.item.text = name;
+    return { ok: true, item: found.item };
+  }
+
+  /**
+   * 设 / 改起始日期。传空 = 清成「未设定」（null，不是空串）。
+   * 正在阅读和已读完成两边都能改 —— 需求里明确写了下方（已完成）也能改。
+   */
+  function setReadingStart(data, readingItemId, dateStr) {
+    var found = findReadingItem(data, readingItemId);
+    if (!found) return fail(ERR.NOT_FOUND);
+
+    if (dateStr === null || dateStr === undefined || dateStr === '') {
+      found.item.start = null;
+      return { ok: true, item: found.item };
+    }
+    if (!Util.isValidDateStr(dateStr)) return fail(ERR.BAD_DATE);
+
+    found.item.start = dateStr;
+    return { ok: true, item: found.item };
+  }
+
+  function removeReadingItem(data, readingItemId) {
+    var found = findReadingItem(data, readingItemId);
+    if (!found) return fail(ERR.NOT_FOUND);
+
+    found.list.splice(found.list.indexOf(found.item), 1);
+    return { ok: true };
+  }
+
+  /**
+   * 勾完成：从「正在阅读」搬到「已读完成」的**开头**。
+   *
+   * doneDate 不传就取**今天**（需求「点击完成之后自动在下方已读完成的内容项上
+   * 显示完成时间」）。搬完**不删 start** —— 行上要显示「2026-10-06 → 2026-10-09」，
+   * 起始日期是这条记录的一部分，跟池里勾完保留 DDL 同理。
+   *
+   * 已经在已完成表里再勾一次：不重复搬，只把 doneAt 更新成传进来的值
+   * （补日期用），条目位置不动。
+   */
+  function completeReadingItem(data, readingItemId, doneDate) {
+    var found = findReadingItem(data, readingItemId);
+    if (!found) return fail(ERR.NOT_FOUND);
+
+    if (doneDate !== undefined && doneDate !== null && doneDate !== '' &&
+        !Util.isValidDateStr(doneDate)) {
+      return fail(ERR.BAD_DATE);
+    }
+    var stamp = Util.isValidDateStr(doneDate) ? doneDate : Util.todayStr();
+
+    if (found.done) {
+      found.item.doneAt = stamp;
+      return { ok: true, item: found.item };
+    }
+
+    var reading = ensureReading(data);
+    found.list.splice(found.list.indexOf(found.item), 1);
+    found.item.doneAt = stamp;
+    // 插到开头：刚读完的排最前，一眼看得见（和「新增排在开头」同一条规矩）
+    reading.done.unshift(found.item);
+    return { ok: true, item: found.item };
+  }
+
+  /**
+   * 取消完成：搬回「正在阅读」（需求没写，但点错了没有退路是硬伤，见 D-65）。
+   * 落回正在阅读表的**开头**，doneAt 清掉（它已经不在已完成表里了，
+   * 留着只会和所在表矛盾 —— normalizeReading 也会把它抹掉）。
+   */
+  function restoreReadingItem(data, readingItemId) {
+    var found = findReadingItem(data, readingItemId);
+    if (!found) return fail(ERR.NOT_FOUND);
+    if (!found.done) return { ok: true, item: found.item };   // 本来就在读，什么都不做
+
+    var reading = ensureReading(data);
+    found.list.splice(found.list.indexOf(found.item), 1);
+    found.item.doneAt = null;
+    reading.active.unshift(found.item);
+    return { ok: true, item: found.item };
+  }
+
+  /**
+   * 阅读栏的计数与「超过 3 项」提示（需求「提示不超过3项」，见 D-64）。
+   *
+   * 只报数、不做拦截：over 为 true 时界面上标一句，加还是照样能加。
+   */
+  function getReadingStats(data) {
+    var reading = ensureReading(data);
+    var limit = CONFIG.READING_ACTIVE_HINT;
+    return {
+      active: reading.active.length,
+      done: reading.done.length,
+      limit: limit,
+      over: reading.active.length > limit
     };
   }
 
@@ -1333,22 +2446,49 @@ var TaskOps = (function (CONFIG, Util, Store) {
     // 定位（只读，测试和上层查询用）
     locateTask: locateTask,
 
-    // 计划池（DS 2.11）
+    // 计划池（DS 2.11 + 需求 4 的任务块 / 逐条 DDL）
     postponeTask: postponeTask,
     postponeStage: postponeStage,
+    postponeBlock: postponeBlock,
     restoreFromPool: restoreFromPool,
     removePoolItem: removePoolItem,
     editPoolItem: editPoolItem,
     setPoolDate: setPoolDate,
     addPoolItem: addPoolItem,
+    addPoolBlock: addPoolBlock,
+    addPoolBlockTask: addPoolBlockTask,
     findPoolItem: findPoolItem,
+    findPoolBlock: findPoolBlock,
+    locatePoolItem: locatePoolItem,
+    // 象限 ↔ 计划池 双向拖拽（requirements 拖拽互通第 3 条）
+    moveTaskToPool: moveTaskToPool,
+    moveBlockToPool: moveBlockToPool,
+    movePoolItemTo: movePoolItemTo,
+    // 池内排序与到期自动导入（v2.6 需求 1 / 需求 3）
+    movePoolItem: movePoolItem,
+    poolItemDueDate: poolItemDueDate,
+    autoImportDuePoolItems: autoImportDuePoolItems,
+    // 池内勾选与沉底（v2.7 需求 1：池内块对齐象限）
+    togglePoolItem: togglePoolItem,
+    togglePoolBlock: togglePoolBlock,
 
     // 完成时段（DS 2.12）
     setSlot: setSlot,
     setStageSlot: setStageSlot,
 
-    // 时间视图（DS 2.13）
+    // Bonus（需求 2）
+    setBonus: setBonus,
+    setStageBonus: setStageBonus,
+
+    // 高亮（requirements 最新一条，见 DS 2.40）
+    setHighlight: setHighlight,
+    setStageHighlight: setStageHighlight,
+    setBlockHighlight: setBlockHighlight,
+    setPoolHighlight: setPoolHighlight,
+
+    // 时间视图（DS 2.13 + 需求 3）
     getTimeView: getTimeView,
+    moveTimeViewItem: moveTimeViewItem,
 
     // 模板（DS 2.14）
     saveDayAsTemplate: saveDayAsTemplate,
@@ -1356,6 +2496,17 @@ var TaskOps = (function (CONFIG, Util, Store) {
     removeTemplate: removeTemplate,
     applyTemplate: applyTemplate,
     findTemplate: findTemplate,
+
+    // 阅读栏（v2.8 需求 2）
+    ensureReading: ensureReading,
+    findReadingItem: findReadingItem,
+    addReadingItem: addReadingItem,
+    editReadingItem: editReadingItem,
+    setReadingStart: setReadingStart,
+    removeReadingItem: removeReadingItem,
+    completeReadingItem: completeReadingItem,
+    restoreReadingItem: restoreReadingItem,
+    getReadingStats: getReadingStats,
 
     // 阶段
     stagesOf: stagesOf,
@@ -1367,7 +2518,11 @@ var TaskOps = (function (CONFIG, Util, Store) {
     moveStage: moveStage,
     setAllStages: setAllStages,
 
-    getStats: getStats
+    getStats: getStats,
+
+    // 搜索过滤（需求 3，只读变换）
+    filterDayByKeyword: filterDayByKeyword,
+    filterTimeViewByKeyword: filterTimeViewByKeyword
   };
 })(
   typeof CONFIG !== 'undefined' ? CONFIG : require('./config.js'),
