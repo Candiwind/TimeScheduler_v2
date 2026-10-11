@@ -168,7 +168,10 @@ body {
 .pool[hidden],
 .templates[hidden],
 .reading[hidden],
-.timeview[hidden] { display: none; }
+.timeview[hidden],
+.principles[hidden],
+.skills[hidden],
+.files[hidden] { display: none; }
 
 /* ---------------------------------------------------------------------------
    四象限：电脑 2×2
@@ -203,14 +206,16 @@ body {
 .quadrant__head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  /* 不用 space-between：v2.13 起头部多了一个折叠三角，三个子项会让
+     space-between 把象限名推到正中间。改成「工具区自己顶到最右」，
+     名字就始终贴着三角（靠左） */
   gap: 8px;
   padding: 6px 8px 6px 12px;
   border-bottom: 1px solid var(--border);
   font-size: 14px;
 }
 .quadrant__name { display: flex; align-items: center; gap: 6px; }
-.quadrant__tools { display: flex; align-items: center; gap: 8px; }
+.quadrant__tools { display: flex; align-items: center; gap: 8px; margin-left: auto; }
 .quadrant__dot {
   width: 8px; height: 8px; border-radius: 50%;
   display: inline-block;
@@ -1024,11 +1029,13 @@ body.is-dragging .block { cursor: grabbing; }
   min-width: 0;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+  /* v2.12 需求 6：名字就是改名入口（单击进去）—— 手感和其他文字格一致 */
+  cursor: text;
 }
 
-/* 行内按钮（应用 / 改名）：始终可见的文字按钮，删除还是 hover 才显形 */
-.tpl__apply,
-.tpl__rename {
+/* 行内按钮（应用）：始终可见的文字按钮，删除还是 hover 才显形。
+   v2.12 需求 6：改名改成「点名字」，这个按钮没了，样式一并去掉 */
+.tpl__apply {
   flex: 0 0 auto;
   font: inherit;
   font-size: 12px;
@@ -1040,8 +1047,7 @@ body.is-dragging .block { cursor: grabbing; }
   cursor: pointer;
   opacity: .8;
 }
-.tpl__apply:hover,
-.tpl__rename:hover { color: var(--text); opacity: 1; }
+.tpl__apply:hover { color: var(--text); opacity: 1; }
 
 .tpl__del {
   flex: 0 0 auto;
@@ -1084,9 +1090,260 @@ body.is-dragging .block { cursor: grabbing; }
 .drag-ghost .stage__postpone { opacity: 0; }
 
 /* ---------------------------------------------------------------------------
+   原则池 / 技能池 / 小文件（v2.12 需求 3 / 需求 4 / 需求 2，见 DS 2.48-2.50）
+   三个都排在模板池下面，都是「跟日期无关的全局清单」，外框沿用计划池那一套
+   （浅色面板 + 左侧一道色条），各自的正文列表有最大高度 + 右侧滚动条 ——
+   **每一个带 overflow-y: auto 的容器都必须在 Render.SCROLL_SLOTS 里登记**
+   （render.js 那张表），否则那一处勾一下就会弹回顶部（R-52）。
+   --------------------------------------------------------------------------- */
+
+.principles,
+.skills,
+.files {
+  margin-top: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+/* 左侧色条按板块各给一个（和池用 --q3、阅读栏用 --q1 同一条视觉语言） */
+.principles { border-left: 3px solid var(--q4); }
+.skills { border-left: 3px solid var(--q2); }
+.files { border-left: 3px solid var(--text-dim); }
+
+.principles__head,
+.skills__head,
+.files__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 14px;
+  color: var(--text-dim);
+}
+.principles__name,
+.skills__name,
+.files__name { font-weight: 600; color: var(--text); }
+
+/* 计数 / 用量：平时是灰色小字 */
+.principles__count,
+.skills__count { font-size: 12px; color: var(--text-dim); }
+
+.files__usage {
+  font-size: 12px;
+  color: var(--text-dim);
+  /* 用量是提示不是按钮，别抢「导入 / ＋」的位置 */
+  margin-left: auto;
+  white-space: nowrap;
+}
+/* 超过建议的 1MB / 10 个：**只标红，不拦**（需求说的是「提示」，见 D-64 / D-80） */
+.files__usage--over { color: var(--q1); font-weight: 600; }
+
+.principles__add,
+.skills__add,
+.files__add,
+.files__load {
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--text-dim);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  padding: 4px 6px;
+  /* 触摸目标别做小（见 DS 3.3） */
+  min-width: 32px;
+  min-height: 32px;
+}
+.principles__add,
+.skills__add { margin-left: auto; }
+.files__load { opacity: .8; }
+.principles__add:hover,
+.skills__add:hover,
+.files__add:hover,
+.files__load:hover { color: var(--text); opacity: 1; }
+
+.principles__empty,
+.principles__none,
+.principles__archived-empty,
+.skills__empty,
+.files__empty {
+  margin: 0;
+  padding: 10px 12px;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+.principles__none { list-style: none; }
+
+/* 三段列表都设最大高度 + 内部滚动（同计划池 / 模板池的做法，需求 5 的口径） */
+.principles__list,
+.principles__archived-list,
+.skills__list,
+.files__list {
+  list-style: none;
+  margin: 0;
+  padding: 2px 0;
+  max-height: 40vh;
+  overflow-y: auto;
+}
+
+.principles__item,
+.skills__item,
+.files__item {
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid var(--border);
+}
+.principles__item:last-child,
+.skills__item:last-child,
+.files__item:last-child { border-bottom: 0; }
+.principles__item .task__row,
+.skills__item .task__row,
+.files__item .task__row { flex: 1 1 auto; min-width: 0; }
+
+/* 勾选框：只做「归档 / 取消归档」，这些板块整块不参与拖拽（不设 touch-action） */
+.principles__check { flex: 0 0 auto; margin-top: 3px; }
+
+.principles__text,
+.skills__text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  cursor: text;
+}
+
+/* 参考原则那一段：标题比正文重一点，用一条上边框和上面分开 */
+.principles__archived { border-top: 1px solid var(--border); }
+.principles__subtitle {
+  margin: 0;
+  padding: 6px 12px;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+.principles__archived-count { margin-left: 6px; font-size: 12px; }
+/* 归档过的条目淡一点：它们是「参考」，不是正在遵循的 */
+.principles__item--archived .principles__text { opacity: .75; }
+
+/* 归档行开头的「↩」：和阅读栏的取消完成同一套形状 */
+.principles__restore {
+  flex: 0 0 auto;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--text-dim);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  padding: 4px 4px 4px 8px;
+}
+.principles__restore:hover { color: var(--text); }
+
+/* 删除：和别处一样 hover 才显形，触摸端半透明常显 */
+.principles__del,
+.skills__del,
+.files__del {
+  flex: 0 0 auto;
+  font: inherit;
+  line-height: 1;
+  color: var(--text-dim);
+  background: transparent;
+  border: 0;
+  padding: 2px 6px;
+  cursor: pointer;
+  opacity: 0;
+}
+.principles__item:hover .principles__del,
+.skills__item:hover .skills__del,
+.files__item:hover .files__del { opacity: 1; }
+.principles__del:hover,
+.skills__del:hover,
+.files__del:hover { color: var(--text); }
+@media (hover: none) {
+  .principles__del,
+  .skills__del,
+  .files__del { opacity: .6; }
+}
+
+/* 技能日期：**和池里的完成时间（.pool__date 系列）逐条一致** —— 同一个东西
+   不做成两样（D-69 / D-70 的理由照搬；test-skills.js 按选择器取规则体比对）。 */
+.skills__date {
+  flex: 0 0 auto;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--text-dim);
+  background: transparent;
+  border: 0;
+  padding: 4px 6px;
+  cursor: pointer;
+  opacity: .8;
+}
+.skills__date:hover { color: var(--text); opacity: 1; }
+.skills__date--empty { opacity: .45; font-style: italic; }
+.skills__date--empty:hover { opacity: .8; }
+.skills__date-input {
+  flex: 0 1 auto;
+  font: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--q2);
+  border-radius: 6px;
+  padding: 3px 6px;
+  min-height: 32px;
+}
+.skills__date-clear {
+  flex: 0 0 auto;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--text-dim);
+  background: transparent;
+  border: 0;
+  padding: 4px 6px;
+  cursor: pointer;
+}
+.skills__date-clear:hover { color: var(--text); }
+
+/* 小文件那一行：文件名本身是个**按钮**（点它打开正文编辑器），所以按文字按钮
+   的样子画 —— 左对齐、占满剩余宽度，和其他的文字格手感一致 */
+.files__open {
+  flex: 1 1 auto;
+  min-width: 0;
+  font: inherit;
+  text-align: left;
+  color: var(--text);
+  background: transparent;
+  border: 0;
+  padding: 4px 6px;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.files__open:hover { color: var(--q2); }
+.files__rename,
+.files__export {
+  flex: 0 0 auto;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--text-dim);
+  background: transparent;
+  border: 0;
+  padding: 4px 6px;
+  cursor: pointer;
+  opacity: .8;
+}
+.files__rename:hover,
+.files__export:hover { color: var(--text); opacity: 1; }
+
+/* ---------------------------------------------------------------------------
    板块收起（v2.8 需求 3）
-   阅读栏 / 计划池 / 模板池三个板块都能收起，收起状态记在本机、刷新后保持
-   （见 DS 2.38）。收起只藏正文，头部那一行留着 —— 不然用户连展开的入口都没了。
+   六个板块都能收起，收起状态记在本机、刷新后保持（见 DS 2.38）；
+   v2.12 需求 10 起**默认全部收起**，点开哪个哪个才展开。
+   收起只藏正文，头部那一行留着 —— 不然用户连展开的入口都没了。
    --------------------------------------------------------------------------- */
 .panel__toggle {
   flex: 0 0 auto;
@@ -1108,18 +1365,72 @@ body.is-dragging .block { cursor: grabbing; }
 /* 收起时三角转成朝右，和面板的折叠方向对上 */
 .is-collapsed .panel__toggle { transform: rotate(-90deg); }
 
+/* ---------------------------------------------------------------------------
+   象限 / 时段块的折叠三角（v2.13 需求，见 DS 2.58）
+
+   和 .panel__toggle 一个长相、一处差别：那六个大板块**默认收起**，
+   象限与时段块**默认展开**（一进 App 就该看见今天的任务）。
+   收起状态同样存本机、下次进来保持；这个按钮是纯界面动作，
+   保护模式下照常能点，所以**不要**把它加进 `body.is-readonly` 的
+   pointer-events 名单（和 .panel__toggle 同一条，见 DS 2.38 的注）。
+   --------------------------------------------------------------------------- */
+.board__toggle {
+  flex: 0 0 auto;
+  font: inherit;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--text-dim);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  padding: 0 2px;
+  /* 触摸目标别做小（见 DS 3.3） */
+  min-width: 24px;
+  min-height: 24px;
+  transition: transform .15s ease;
+}
+.board__toggle:hover { color: var(--text); }
+.is-collapsed .board__toggle { transform: rotate(-90deg); }
+
+/* 折叠后只留标题栏：象限内容 / 时段块列表整个藏起来 */
+.quadrant.is-collapsed .quadrant__body,
+.timeview__group.is-collapsed .timeview__list { display: none; }
+
+/* 折叠后头部那条下边框就没必要了（下面已经没东西） */
+.quadrant.is-collapsed .quadrant__head,
+.timeview__group.is-collapsed .timeview__title { border-bottom: 0; }
+
+/* 折叠后不要再占着 60vh 的最大高度 —— 一格就一条标题栏那么高。
+   网页版象限是 2×2 网格：折叠一格只让它自己变矮（`.quadrants` 是
+   `align-items: start`，卡片按内容高，旁边那格照旧、不会被拉扁），
+   留下的空位就是网格本身的空位 —— 这是最省事、也最好预期的处理。 */
+.quadrant.is-collapsed { align-self: start; }
+
+
+
 .pool.is-collapsed .pool__list,
 .pool.is-collapsed .pool__empty,
 .templates.is-collapsed .tpl__list,
 .templates.is-collapsed .tpl__empty,
 .reading.is-collapsed .reading__list,
 .reading.is-collapsed .reading__done,
-.reading.is-collapsed .reading__empty { display: none; }
+.reading.is-collapsed .reading__empty,
+/* v2.12 的三个板块：正文（列表 / 归档段 / 空态）一起藏起来 */
+.principles.is-collapsed .principles__list,
+.principles.is-collapsed .principles__archived,
+.principles.is-collapsed .principles__empty,
+.skills.is-collapsed .skills__list,
+.skills.is-collapsed .skills__empty,
+.files.is-collapsed .files__list,
+.files.is-collapsed .files__empty { display: none; }
 
 /* 收起后头部那条下边框看着多余（下面已经没东西了） */
 .pool.is-collapsed .pool__head,
 .templates.is-collapsed .tpl__head,
-.reading.is-collapsed .reading__head { border-bottom: 0; }
+.reading.is-collapsed .reading__head,
+.principles.is-collapsed .principles__head,
+.skills.is-collapsed .skills__head,
+.files.is-collapsed .files__head { border-bottom: 0; }
 
 /* ---------------------------------------------------------------------------
    阅读栏（v2.8 需求 2，见 DS 2.37）
@@ -1475,7 +1786,6 @@ body.is-readonly .pool__import,
 body.is-readonly .pool__block-import,
 body.is-readonly .tpl__save,
 body.is-readonly .tpl__apply,
-body.is-readonly .tpl__rename,
 body.is-readonly .tpl__del,
 body.is-readonly .reading__add,
 body.is-readonly .reading__check,
@@ -1483,12 +1793,31 @@ body.is-readonly .reading__start,
 body.is-readonly .reading__start-clear,
 body.is-readonly .reading__restore,
 body.is-readonly .reading__del,
+/* v2.12 的三个板块：原则池 / 技能池 / 小文件的所有写控件 */
+body.is-readonly .principles__add,
+body.is-readonly .principles__check,
+body.is-readonly .principles__restore,
+body.is-readonly .principles__del,
+body.is-readonly .skills__add,
+body.is-readonly .skills__date,
+body.is-readonly .skills__date-clear,
+body.is-readonly .skills__del,
+body.is-readonly .files__add,
+body.is-readonly .files__load,
+body.is-readonly .files__open,
+body.is-readonly .files__rename,
+body.is-readonly .files__export,
+body.is-readonly .files__del,
 body.is-readonly .slot__select { pointer-events: none; opacity: .3; }
 /* 点文字进编辑也得挡住：保护模式下允许编辑就等于允许覆盖原始数据 */
 body.is-readonly .task__text,
 body.is-readonly .block__name,
 body.is-readonly .pool__text,
 body.is-readonly .pool__block-name,
+body.is-readonly .principles__text,
+body.is-readonly .skills__text,
+/* v2.12 需求 6：模板名成了改名入口（单击），保护模式下一样得点不动 */
+body.is-readonly .tpl__name,
 body.is-readonly .reading__text { pointer-events: none; }
 
 /* 收起 / 展开是纯界面动作，不属于「改数据」，保护模式下照常能点 ——
@@ -1629,7 +1958,11 @@ body.is-readonly .reading__text { pointer-events: none; }
 .stage--highlight:not(.stage--done) .stage__text,
 .block--highlight:not(.block--done) .block__name,
 .pool__item--highlight:not(.pool__item--done) .pool__text,
-.pool__block--highlight:not(.pool__block--done) .pool__block-name {
+.pool__block--highlight:not(.pool__block--done) .pool__block-name,
+/* 模板高亮（v2.12 需求 6）：双击模板 = 整条标黄。「Highlight 方式和之前的任务
+   一样」—— 同一组变量、同一个画法（画在名字那段文字上）。
+   唯一区别：模板**没有完成态**，所以这里没有 :not(--done) 那一半（它不会失效） */
+.tpl__item--highlight .tpl__name {
   background: var(--hl-bg);
   color: var(--hl-text);
   padding: 0 3px;

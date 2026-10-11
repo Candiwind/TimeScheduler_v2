@@ -48,6 +48,119 @@ var TaskOps = (function (CONFIG, Util, Store) {
   }
 
   // -------------------------------------------------------------------------
+  // 新条目的默认时段 + 按完成时间排序（v2.12 需求 8 / 需求 9，见 DS 2.47）
+  //
+  // 需求 8：「新添加的任务或阶段自动分配时间」——
+  //   第一、三象限（重要 / 紧急那一对）按**当前时刻**落在哪一段，
+  //   第二、四象限一律「晚上」。
+  // 需求 9：「每次新添加完任务或阶段之后，各个任务按照完成时间排序」——
+  //   带多个阶段的任务，用其中**最晚**的阶段时段当它整体的完成时间；
+  //   任务块不参与排序（块留在它原来的位置上）。
+  //
+  // 「完成时间」在这个应用里就是六值时段（CONFIG.SLOTS）：任务 / 阶段身上
+  // 那个下拉选的就是它，时间视图也是按它分组的。所以「按完成时间排序」=
+  // 按 SLOTS 的先后排，早上在前、晚上在后。
+  // -------------------------------------------------------------------------
+
+  /** 第二、四象限的默认时段（需求 8 的原话：这两个象限默认晚上） */
+  var EVENING_SLOT_INDEX = 5;
+
+  /**
+   * 新任务 / 新阶段该落在哪个时段。
+   *
+   * 只认象限：第一、三象限按此刻的钟点，第二、四象限固定晚上。象限 id 认不出来
+   * 时按「晚上」兜底（宁可给个保守的值，也不要让新条目没有时段 —— 那会让需求 8
+   * 时灵时不灵，还查不出原因）。
+   *
+   * @param {string} quadrantId
+   * @param {Date} [nowDate] 不传就是此刻（测试靠它把钟点钉死）
+   */
+  function defaultSlotFor(quadrantId, nowDate) {
+    if (quadrantId !== 'I' && quadrantId !== 'III') {
+      return CONFIG.SLOTS[EVENING_SLOT_INDEX];
+    }
+    return CONFIG.SLOTS[Util.slotIndexByClock(nowDate)];
+  }
+
+  /** 时段在一天里的序（-1 = 没设时段） */
+  function slotRankOf(slot) {
+    return (typeof slot === 'string') ? CONFIG.SLOTS.indexOf(slot) : -1;
+  }
+
+  /**
+   * 一个条目整体的「完成时间」序（需求 9 后半句）：
+   * 有阶段 → 取**最晚**那个阶段的时段；没阶段 → 它自己的时段。
+   * 都没设 → -1，排在同组最后（「未设定」不该排在早上前面，那等于替用户
+   * 决定了一件他还没想好的事）。
+   */
+  function itemSlotRank(item) {
+    var stages = stagesOf(item);
+    var best = -1;
+    if (stages.length) {
+      for (var i = 0; i < stages.length; i++) {
+        var r = slotRankOf(stages[i].slot);
+        if (r > best) best = r;
+      }
+      return best;
+    }
+    return slotRankOf(item.slot);
+  }
+
+  /**
+   * 把一个象限列表里的**任务**按完成时间排好（需求 9）。
+   *
+   * 两条既有规矩必须同时成立，所以排序键是复合的：
+   *   1. 未完成在前、已完成在后（需求 6 的沉底口径，别被排序顶掉）；
+   *   2. 同组内按时段先后，没设时段的排最后。
+   * 排序用的是 **ES2019 稳定排序**：同一个键上的条目保持原来的先后 ——
+   * 新任务本来就是 unshift 到开头的（D-50），所以「同一时段里新加的在最前」
+   * 这条也一并保住了。见 DS 2.47。
+   *
+   * **任务块不参与**（需求原话）：块留在它原来的位置上，任务只在这些空位上换位。
+   * 这么写还有个好处 —— 块与任务混排时，用户手拖出来的大致版式不会被排序打乱。
+   */
+  function sortTasksByTime(list) {
+    if (!Array.isArray(list)) return false;
+
+    var positions = [];
+    var tasks = [];
+    for (var i = 0; i < list.length; i++) {
+      if (!isBlock(list[i])) {
+        positions.push(i);
+        tasks.push({ item: list[i], at: i });
+      }
+    }
+    if (tasks.length < 2) return false;
+
+    tasks.sort(function (a, b) {
+      var da = getProgress(a.item).isComplete ? 1 : 0;
+      var db = getProgress(b.item).isComplete ? 1 : 0;
+      if (da !== db) return da - db;
+
+      var ra = itemSlotRank(a.item);
+      var rb = itemSlotRank(b.item);
+      if (ra === -1) ra = CONFIG.SLOTS.length;   // 没设时段：排在有时段的后面
+      if (rb === -1) rb = CONFIG.SLOTS.length;
+      if (ra !== rb) return ra - rb;
+
+      return a.at - b.at;   // 同键按原位置（稳定）
+    });
+
+    for (var k = 0; k < positions.length; k++) {
+      list[positions[k]] = tasks[k].item;
+    }
+    return true;
+  }
+
+  /** 某天某象限的任务重排一次（addTask / addStage 收尾用，见需求 9） */
+  function sortQuadrantByTime(data, dateStr, quadrantId) {
+    if (!data || !data.dates || !data.dates[dateStr]) return false;
+    var list = data.dates[dateStr][quadrantId];
+    if (!Array.isArray(list)) return false;
+    return sortTasksByTime(list);
+  }
+
+  // -------------------------------------------------------------------------
   // 任务块（DS 2.10）
   //
   // 象限列表里的条目有两种：普通任务、任务块。块的形状见 store.js 的
@@ -176,12 +289,19 @@ var TaskOps = (function (CONFIG, Util, Store) {
   // -------------------------------------------------------------------------
 
   /**
-   * 新增一条任务，加到该象限列表的**开头**（需求 3）。
+   * 新增一条任务，加到该象限列表的**开头**（需求 3），随后按完成时间重排
+   * （v2.12 需求 9）。
    *
-   * 新加的东西排在最前，用户刚敲进去的任务一眼就能看到，不用滚到底下去找。
-   * 时间视图走同一条规矩（v2.5）：新增的条目也排在该时段最前。
+   * 新加的东西先排在最前 —— 同一时段里它就该在最前（unshift 的名字没白起，
+   * 稳定排序会把它留在同组最前）。然后整表按时段排，用户刚敲进去的任务
+   * 落在「它该做的那一段」上，不用自己再拖。
+   *
+   * **时段默认值**（v2.12 需求 8）：第一、三象限按此刻的钟点，第二、四象限
+   * 晚上。时限不允许出现「无时段」这一分类（v1 就定了），所以这里一定会给上。
+   *
+   * @param {Date} [nowDate] 算默认时段的「此刻」，不传就是现在（测试用）
    */
-  function addTask(data, dateStr, quadrantId, text) {
+  function addTask(data, dateStr, quadrantId, text, nowDate) {
     var bad = checkTarget(dateStr, quadrantId);
     if (bad) return fail(bad);
 
@@ -192,10 +312,12 @@ var TaskOps = (function (CONFIG, Util, Store) {
       id: Util.genId(),
       text: clean,
       completed: false,
-      createdAt: Date.now()
+      createdAt: Date.now(),
+      slot: defaultSlotFor(quadrantId, nowDate)
     };
 
     Store.ensureDay(data, dateStr)[quadrantId].unshift(task);
+    sortQuadrantByTime(data, dateStr, quadrantId);   // 需求 9
     return { ok: true, task: task };
   }
 
@@ -357,8 +479,14 @@ var TaskOps = (function (CONFIG, Util, Store) {
    * 加的瞬间，父任务的 completed 会被同步成「阶段全完成了吗」——
    * 也就是变成 false（新加的这条还没勾）。这是有意的：
    * 一条任务从「没阶段、已完成」变成「有阶段、未完成」，才符合直觉。
+   *
+   * v2.12：新阶段同样自动分配时段（需求 8，按**所在象限**算），加完之后
+   * 这个象限的任务整体按完成时间重排（需求 9）—— 父任务「整体完成时间」
+   * 取的就是最晚的那个阶段，新阶段排得晚，父任务就会往后挪。
+   *
+   * @param {Date} [nowDate] 算默认时段的「此刻」，不传就是现在（测试用）
    */
-  function addStage(data, dateStr, quadrantId, taskId, text) {
+  function addStage(data, dateStr, quadrantId, taskId, text, nowDate) {
     var located = locateTask(data, dateStr, quadrantId, taskId);
     if (!located) return fail(ERR.NOT_FOUND);
 
@@ -372,11 +500,13 @@ var TaskOps = (function (CONFIG, Util, Store) {
       id: Util.genId(),
       text: clean,
       completed: false,
-      createdAt: Date.now()
+      createdAt: Date.now(),
+      slot: defaultSlotFor(located.quadrantId, nowDate)
     };
     task.stages.push(stage);
     syncCompleted(task);
     syncHostBlock(data, dateStr, located.quadrantId, located.blockId);
+    sortQuadrantByTime(data, dateStr, located.quadrantId);   // 需求 9
 
     return { ok: true, stage: stage };
   }
@@ -1300,6 +1430,12 @@ var TaskOps = (function (CONFIG, Util, Store) {
     var due = [];
 
     for (var i = 0; i < pool.length; i++) {
+      // v2.12 需求 7 的连带规矩：**已完成的池条目不再自动导入**。
+      // 勾完那一瞬间它的完成时间被改成了今天（stampPoolCompleted），
+      // 不跳过的话第二天它就会自己跑进象限，池里刚划掉的东西又冒出来一条。
+      // 池里勾完的东西留在池里，要出去走「导入」或拖回（同 D-61 / 2.35 的取舍）。
+      if (progressOfItem(pool[i]).isComplete) continue;
+
       var dueDate = poolItemDueDate(pool[i]);
       if (dueDate !== null && dueDate <= todayStr) due.push(pool[i]);
     }
@@ -1348,6 +1484,26 @@ var TaskOps = (function (CONFIG, Util, Store) {
   }
 
   /**
+   * v2.12 需求 7：池内一条任务勾选完成后，把它行上那个「完成时间」更新成**今天**。
+   *
+   * 需求原话是「计划池的完成时间，请在勾选完成之后更新」。池里那行日期本来就是
+   * 这条任务的完成时间（DDL），勾完之后它就成了「实际上哪天做完的」—— 不更新
+   * 的话它会一直停在当初计划的日期上，和池里划掉的那条对不上账。
+   *
+   * 取的是**真实今天**（不是正在查看的日期）：完成这件事发生在当下，
+   * 和阅读栏勾完自动记今天同一条口径（见 DS 2.37 / D-67）。
+   *
+   * 连带的一条规矩（同一条需求引出来的，见 DS 2.35 修订）：**已完成的池条目
+   * 不参与自动导入**。不这么定的话，勾完当天下一次启动它就会被「计划日期到了」
+   * 搬进象限（日期刚被改成了今天）—— 池里刚划掉的东西第二天跑到任务列表里，
+   * 看着就像凭空多出来一条。要它进象限，仍旧走「导入」按钮或拖回去。
+   */
+  function stampPoolCompleted(item) {
+    if (!item) return;
+    item.plannedDate = Util.todayStr();
+  }
+
+  /**
    * v2.7 需求 1：勾选池内一个**任务块** —— 块内所有任务（连同阶段）设成同一状态。
    * 和象限 `toggleBlock` 同一套骨架，区别只在定位方式：池内块没有日期，
    * 靠 `findPoolItem`（块只存在于池顶层，和象限「块只在顶层」是同一条规矩）。
@@ -1374,6 +1530,8 @@ var TaskOps = (function (CONFIG, Util, Store) {
     syncBlockCompleted(block);
 
     for (var j = 0; j < flipped.length; j++) {
+      // v2.12 需求 7：勾完把「完成时间」改成今天（DDL 在任务身上，块本体不设）
+      stampPoolCompleted(flipped[j]);
       sendPoolCompletedToEnd(data, {
         container: 'block', block: block, item: flipped[j]
       });
@@ -1415,6 +1573,8 @@ var TaskOps = (function (CONFIG, Util, Store) {
     if (located.container === 'block') syncBlockCompleted(located.block);
 
     if (!wasComplete && getProgress(item).isComplete) {
+      // v2.12 需求 7：勾选完成后把「完成时间」更新成今天
+      stampPoolCompleted(item);
       sendPoolCompletedToEnd(data, located);
     }
 
@@ -1580,6 +1740,24 @@ var TaskOps = (function (CONFIG, Util, Store) {
     else delete located.item.highlight;
 
     return { ok: true, item: located.item };
+  }
+
+  /**
+   * 设定 / 清除**模板**的高亮（v2.12 需求 6）。
+   *
+   * 需求原话是「优化模板池的改名方式，改成单击改名，双击 Highlight（Highlight
+   * 方式和之前的任务 Highlight 一样）」—— 双击那一下要落到数据里，而模板
+   * 自己就是一条数据，所以 highlight 记在模板身上（不是记在它里面的任务上，
+   * 也不传染过去：标的是「这份底稿」，和它装了什么是两件事）。
+   */
+  function setTemplateHighlight(data, templateId, highlight) {
+    var found = findTemplate(data, templateId);
+    if (!found) return fail(ERR.NOT_FOUND);
+
+    if (highlight) found.template.highlight = true;
+    else delete found.template.highlight;
+
+    return { ok: true, template: found.template };
   }
 
   /**
@@ -2416,6 +2594,280 @@ var TaskOps = (function (CONFIG, Util, Store) {
   }
 
   // -------------------------------------------------------------------------
+  // 原则池（v2.12 需求 3，见 DS 2.48）
+  //
+  // 形状和阅读栏几乎一样（两张表 + 勾一下搬表 + 取消完成搬回来），但按需求
+  // 「可以简化，去掉时间相关信息的记录」**砍掉了所有日期**：一条原则就是
+  // 一句话，归档也不记时间戳。归档那段在界面上叫「参考原则」（需求点名的名字）。
+  //
+  // 和阅读栏一样，它不参与统计 / 完成率 / 日报，但属于用户数据 ——
+  // 随 JSON 导出导入（见 store / importer）。
+  // -------------------------------------------------------------------------
+
+  /** 拿到原则池那张表，缺了就补上（老数据 / 手写对象都扛得住） */
+  function ensurePrinciples(data) {
+    if (!data.principles || typeof data.principles !== 'object') {
+      data.principles = { active: [], archived: [] };
+    }
+    if (!Array.isArray(data.principles.active)) data.principles.active = [];
+    if (!Array.isArray(data.principles.archived)) data.principles.archived = [];
+    return data.principles;
+  }
+
+  /** 按 id 找一条原则，返回 { item, list, archived }；找不到返回 null */
+  function findPrincipleItem(data, principleId) {
+    var principles = ensurePrinciples(data);
+    var tables = [['active', false], ['archived', true]];
+    for (var t = 0; t < tables.length; t++) {
+      var list = principles[tables[t][0]];
+      for (var i = 0; i < list.length; i++) {
+        if (list[i].id === principleId) {
+          return { item: list[i], list: list, archived: tables[t][1] };
+        }
+      }
+    }
+    return null;
+  }
+
+  /** 加一条原则，压进「正在遵循」的末尾。文本去空白后为空就拒绝 */
+  function addPrinciple(data, text) {
+    var clean = Util.cleanText(text);
+    if (!clean) return fail(ERR.EMPTY_TEXT);
+
+    var item = {
+      id: Util.genId(),
+      text: clean,
+      createdAt: Date.now()
+    };
+    ensurePrinciples(data).active.push(item);
+    return { ok: true, item: item };
+  }
+
+  /** 改原则的文字（改空了拒绝、原名保留 —— 和任务同一条规矩） */
+  function editPrinciple(data, principleId, text) {
+    var found = findPrincipleItem(data, principleId);
+    if (!found) return fail(ERR.NOT_FOUND);
+
+    var clean = Util.cleanText(text);
+    if (!clean) return fail(ERR.EMPTY_TEXT);
+
+    found.item.text = clean;
+    return { ok: true, item: found.item };
+  }
+
+  function removePrinciple(data, principleId) {
+    var found = findPrincipleItem(data, principleId);
+    if (!found) return fail(ERR.NOT_FOUND);
+
+    found.list.splice(found.list.indexOf(found.item), 1);
+    return { ok: true, item: found.item };
+  }
+
+  /**
+   * 归档：从「正在遵循」搬到「参考原则」的**开头**。
+   * 已经在参考原则里的再来一次就什么都不做（幂等，同 completeReadingItem 的取舍）。
+   */
+  function archivePrinciple(data, principleId) {
+    var found = findPrincipleItem(data, principleId);
+    if (!found) return fail(ERR.NOT_FOUND);
+    if (found.archived) return { ok: true, item: found.item };
+
+    var principles = ensurePrinciples(data);
+    found.list.splice(found.list.indexOf(found.item), 1);
+    principles.archived.unshift(found.item);
+    return { ok: true, item: found.item };
+  }
+
+  /** 从参考原则放回「正在遵循」（需求没写，但点错了得有退路，同 reading 的 D-65） */
+  function restorePrinciple(data, principleId) {
+    var found = findPrincipleItem(data, principleId);
+    if (!found) return fail(ERR.NOT_FOUND);
+    if (!found.archived) return { ok: true, item: found.item };
+
+    var principles = ensurePrinciples(data);
+    found.list.splice(found.list.indexOf(found.item), 1);
+    principles.active.unshift(found.item);
+    return { ok: true, item: found.item };
+  }
+
+  /** 两边的条数（头部要显示 n / 归档 m） */
+  function getPrincipleStats(data) {
+    var principles = ensurePrinciples(data);
+    return { active: principles.active.length, archived: principles.archived.length };
+  }
+
+  // -------------------------------------------------------------------------
+  // 技能池（v2.12 需求 4，见 DS 2.49）
+  //
+  // 一条技能 = 文字 + 一个日期（默认是加进来的那天，可以改、可以清）。
+  // 和池里的 DDL、阅读栏的起始日期用的是**同一个日期控件、同一套提交方式**
+  // （见 D-70），所以这里只做数据。
+  // -------------------------------------------------------------------------
+
+  function ensureSkills(data) {
+    if (!Array.isArray(data.skills)) data.skills = [];
+    return data.skills;
+  }
+
+  function findSkill(data, skillId) {
+    var skills = ensureSkills(data);
+    for (var i = 0; i < skills.length; i++) {
+      if (skills[i].id === skillId) return { item: skills[i], index: i };
+    }
+    return null;
+  }
+
+  /**
+   * 加一条技能。`dateStr` 不传 / 传空 → 取**今天**（需求原话「日期默认为添加
+   * 该技能的日期」）；传了但不合法 → BAD_DATE 拒绝，不猜。
+   */
+  function addSkill(data, text, dateStr) {
+    var clean = Util.cleanText(text);
+    if (!clean) return fail(ERR.EMPTY_TEXT);
+
+    if (dateStr !== undefined && dateStr !== null && dateStr !== '' &&
+        !Util.isValidDateStr(dateStr)) {
+      return fail(ERR.BAD_DATE);
+    }
+
+    var item = {
+      id: Util.genId(),
+      text: clean,
+      date: Util.isValidDateStr(dateStr) ? dateStr : Util.todayStr(),
+      createdAt: Date.now()
+    };
+    ensureSkills(data).push(item);
+    return { ok: true, item: item };
+  }
+
+  function editSkill(data, skillId, text) {
+    var found = findSkill(data, skillId);
+    if (!found) return fail(ERR.NOT_FOUND);
+
+    var clean = Util.cleanText(text);
+    if (!clean) return fail(ERR.EMPTY_TEXT);
+
+    found.item.text = clean;
+    return { ok: true, item: found.item };
+  }
+
+  /** 设 / 改日期；传空 = 清成「未设定」（null，不是空串 —— 同 setReadingStart） */
+  function setSkillDate(data, skillId, dateStr) {
+    var found = findSkill(data, skillId);
+    if (!found) return fail(ERR.NOT_FOUND);
+
+    if (dateStr === null || dateStr === undefined || dateStr === '') {
+      found.item.date = null;
+      return { ok: true, item: found.item };
+    }
+    if (!Util.isValidDateStr(dateStr)) return fail(ERR.BAD_DATE);
+
+    found.item.date = dateStr;
+    return { ok: true, item: found.item };
+  }
+
+  function removeSkill(data, skillId) {
+    var found = findSkill(data, skillId);
+    if (!found) return fail(ERR.NOT_FOUND);
+
+    ensureSkills(data).splice(found.index, 1);
+    return { ok: true, item: found.item };
+  }
+
+  function getSkillStats(data) {
+    return { count: ensureSkills(data).length };
+  }
+
+  // -------------------------------------------------------------------------
+  // 小文件（v2.12 需求 2，见 DS 2.50）
+  //
+  // 「我存的一些小文件」，只支持 txt（导入时拦后缀、导出时补 .txt）。
+  // 一条 = { id, name, text, createdAt }；text 可以是空串（空文件合法）。
+  // 需求那句「提示总共不能超过 1M 空间或 10 个文件」是**软提示**：超了照样存，
+  // 只在头部把用量标红（和阅读栏「建议不超过 3 项」同一条口径，见 D-64）。
+  // -------------------------------------------------------------------------
+
+  function ensureFiles(data) {
+    if (!Array.isArray(data.files)) data.files = [];
+    return data.files;
+  }
+
+  function findFile(data, fileId) {
+    var files = ensureFiles(data);
+    for (var i = 0; i < files.length; i++) {
+      if (files[i].id === fileId) return { item: files[i], index: i };
+    }
+    return null;
+  }
+
+  /** 加一个小文件。名字去空白后为空就拒绝（一排没名字的文件没法认） */
+  function addFile(data, name, text) {
+    var clean = Util.cleanText(name);
+    if (!clean) return fail(ERR.EMPTY_TEXT);
+
+    var item = {
+      id: Util.genId(),
+      name: clean,
+      text: typeof text === 'string' ? text : '',
+      createdAt: Date.now()
+    };
+    ensureFiles(data).push(item);
+    return { ok: true, file: item };
+  }
+
+  function renameFile(data, fileId, name) {
+    var found = findFile(data, fileId);
+    if (!found) return fail(ERR.NOT_FOUND);
+
+    var clean = Util.cleanText(name);
+    if (!clean) return fail(ERR.EMPTY_TEXT);
+
+    found.item.name = clean;
+    return { ok: true, file: found.item };
+  }
+
+  /** 改文件内容：**空内容也合法**（空文件是合法文件，别拿「不能为空」拦它） */
+  function setFileText(data, fileId, text) {
+    var found = findFile(data, fileId);
+    if (!found) return fail(ERR.NOT_FOUND);
+
+    found.item.text = typeof text === 'string' ? text : '';
+    return { ok: true, file: found.item };
+  }
+
+  function removeFile(data, fileId) {
+    var found = findFile(data, fileId);
+    if (!found) return fail(ERR.NOT_FOUND);
+
+    ensureFiles(data).splice(found.index, 1);
+    return { ok: true, file: found.item };
+  }
+
+  /**
+   * 用量：条数 + 总字节数（按 UTF-8 算，中文一个字 3 字节），以及有没有超
+   * 「1MB / 10 个」这两条软线。界面拿它决定要不要把数字标红。
+   */
+  function getFilesStats(data) {
+    var files = ensureFiles(data);
+    var bytes = 0;
+    for (var i = 0; i < files.length; i++) {
+      bytes += Util.utf8ByteLength(files[i].name) + Util.utf8ByteLength(files[i].text);
+    }
+    var overCount = files.length > CONFIG.FILES_MAX_COUNT;
+    var overBytes = bytes > CONFIG.FILES_MAX_BYTES;
+    return {
+      count: files.length,
+      bytes: bytes,
+      maxCount: CONFIG.FILES_MAX_COUNT,
+      maxBytes: CONFIG.FILES_MAX_BYTES,
+      overCount: overCount,
+      overBytes: overBytes,
+      // 两条软线任意一条超了就是「超限」—— 界面只用这一个布尔标红（DS 2.50）
+      over: overCount || overBytes
+    };
+  }
+
+  // -------------------------------------------------------------------------
 
   return {
     ERR: ERR,
@@ -2485,6 +2937,12 @@ var TaskOps = (function (CONFIG, Util, Store) {
     setStageHighlight: setStageHighlight,
     setBlockHighlight: setBlockHighlight,
     setPoolHighlight: setPoolHighlight,
+    // 模板高亮（v2.12 需求 6：双击模板 = 整条标黄）
+    setTemplateHighlight: setTemplateHighlight,
+
+    // 新条目默认时段 + 按完成时间排序（v2.12 需求 8 / 需求 9，见 DS 2.47）
+    defaultSlotFor: defaultSlotFor,
+    sortTasksByTime: sortTasksByTime,
 
     // 时间视图（DS 2.13 + 需求 3）
     getTimeView: getTimeView,
@@ -2507,6 +2965,34 @@ var TaskOps = (function (CONFIG, Util, Store) {
     completeReadingItem: completeReadingItem,
     restoreReadingItem: restoreReadingItem,
     getReadingStats: getReadingStats,
+
+    // 原则池（v2.12 需求 3）—— 归档那段在界面上叫「参考原则」
+    ensurePrinciples: ensurePrinciples,
+    findPrincipleItem: findPrincipleItem,
+    addPrinciple: addPrinciple,
+    editPrinciple: editPrinciple,
+    removePrinciple: removePrinciple,
+    archivePrinciple: archivePrinciple,
+    restorePrinciple: restorePrinciple,
+    getPrincipleStats: getPrincipleStats,
+
+    // 技能池（v2.12 需求 4）
+    ensureSkills: ensureSkills,
+    findSkill: findSkill,
+    addSkill: addSkill,
+    editSkill: editSkill,
+    setSkillDate: setSkillDate,
+    removeSkill: removeSkill,
+    getSkillStats: getSkillStats,
+
+    // 小文件（v2.12 需求 2）
+    ensureFiles: ensureFiles,
+    findFile: findFile,
+    addFile: addFile,
+    renameFile: renameFile,
+    setFileText: setFileText,
+    removeFile: removeFile,
+    getFilesStats: getFilesStats,
 
     // 阶段
     stagesOf: stagesOf,

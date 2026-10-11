@@ -638,15 +638,17 @@ function bodyOf(name) {
   return end === -1 ? app.slice(start) : app.slice(start, end);
 }
 
-t('三处点击分流都在最前面认 e.detail >= 2（象限 / 时间视图 / 计划池）', function () {
+t('四处点击分流都在最前面认 e.detail >= 2（象限 / 时间视图 / 计划池 / 模板池）', function () {
+  // v2.12 需求 6 加了第四处：模板池双击 = 整条高亮（Highlight 方式和任务一样）
   var hits = app.match(/if \(e\.detail >= 2\) \{\s*\n\s*handleSecondClick\(\);/g) || [];
-  h.assertEqual(hits.length, 3, '应该正好三处');
+  h.assertEqual(hits.length, 4, '应该正好四处');
 });
 
-t('三处各自把「点到了哪一条」记进 state.clickHit（都过 rememberHit 打时间戳）', function () {
+t('四处各自把「点到了哪一条」记进 state.clickHit（都过 rememberHit 打时间戳）', function () {
   h.assertTrue(app.indexOf('state.clickHit = rememberHit(hitOfQuadrant(target));') !== -1);
   h.assertTrue(app.indexOf('state.clickHit = rememberHit(hitOfTimeView(target));') !== -1);
   h.assertTrue(app.indexOf('state.clickHit = rememberHit(hitOfPool(target));') !== -1);
+  h.assertTrue(app.indexOf('state.clickHit = rememberHit(hitOfTemplate(target));') !== -1);
   h.assertTrue(bodyOf('rememberHit').indexOf('hit.at = Date.now();') !== -1);
 });
 
@@ -682,9 +684,9 @@ t('双击落在输入框 / 勾选框 / 按钮 / 下拉上不算高亮', function
   h.assertTrue(body.indexOf("tag === 'TEXTAREA'") !== -1);
   h.assertTrue(body.indexOf("tag === 'SELECT'") !== -1);
   h.assertTrue(body.indexOf("tag === 'BUTTON'") !== -1);
-  // 三处入口都要先过这一道
+  // 四处入口都要先过这一道（v2.12 需求 6 起模板池算第四处）
   var used = app.match(/isControlNode\(target\)/g) || [];
-  h.assertEqual(used.length, 3);
+  h.assertEqual(used.length, 4);
 });
 
 t('保护模式下双击不改数据', function () {

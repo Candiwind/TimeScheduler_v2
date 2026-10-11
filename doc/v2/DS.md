@@ -2,6 +2,32 @@
 
 ## 版本记录
 
+**2026/10/11 v2.13**
+
+对应 `doc/v2/requirements.txt` **最新一条**（v2.12 之后追加的一条），以及 `doc/v2/FS.md` v2.13：**每一块板都能折叠 / 展开，并且记住状态**（四象限的每一个象限、时间视图的每一个时段块）。**完全不改存储格式**：`schemaVersion` 仍为 1，主数据一个字段没动 —— 折叠状态是**界面状态**，住在既有的 `foldState` key 里（新开一张 `collapsedBoards` 表），因此 v2.1–v2.12 导出的 JSON 都能照常导入，v2.13 导出的文件老版本也读得下。
+
+| 条 | 需求 | 设计在哪 | 状态 |
+|---|---|---|---|
+| 1 | 每个板块都能折叠 / 打开，下次进来保持上次的状态（点名四象限的每个象限、时间视图的每个时段块；移动端为主，网页版尽量做） | 2.58 + D-87 + R-55 | 已实现（六个大板块 v2.12 已做；本版补齐象限与时段块，两张表互不干扰） |
+
+**2026/10/11 v2.12**
+
+对应 `doc/v2/requirements.txt` **最前面的 11 条**（v2.11 之后追加的那批），以及 `doc/v2/FS.md` v2.12。**存储格式仍只做加法**：`schemaVersion` 保持 1，新增 `principles` / `skills` / `files` 三个**可选**顶层字段 + 模板身上一个**可选**布尔 `highlight`。老数据 / 老备份 / 老导出文件里没有这些字段 → 读进来就是「空表 / 没高亮」，所以 v2.1–v2.11 导出的 JSON 都能照常导入，v2.12 导出的文件老版本也读得下（不认识的字段忽略）。
+
+| 条 | 需求 | 设计在哪 | 状态 |
+|---|---|---|---|
+| 1 | 日报（routine）只含象限内容，计划池等一概不进 | 2.53 + D-84 | 已实现（口径落在 FS + 回归守卫；代码本来就是只画象限） |
+| 2 | 小文件：1M / 10 个软提示、只支持 txt、像任务信息一样导入导出 | 2.50 + D-80 + R-48 | 已实现 |
+| 3 | 原则池（像阅读栏但去掉时间），归档列表叫「参考原则」 | 2.51 + D-81 | 已实现 |
+| 4 | 技能池：可加技能、日期默认添加当天、可编辑 | 2.52 + D-82 | 已实现 |
+| 5 | 导出技能池 / 已读书籍清单为 txt/markdown | 2.52 + D-82 | 已实现（`.md`，内容即纯文本列表） |
+| 6 | 模板池改单击改名，双击 Highlight（和任务高亮同一套） | 2.55 + D-83 | 已实现 |
+| 7 | 计划池的完成时间在勾选完成之后更新 | 2.49 + D-79 + R-51 | 已实现（连带一条：已完成的池条目不再自动导入） |
+| 8 | 新任务 / 阶段自动分配时段（I、III 按钟点，II、IV 晚上） | 2.48 + D-78 | 已实现 |
+| 9 | 加完任务 / 阶段按完成时间排序（多阶段取最晚；块不排序） | 2.48 + D-78 + R-49 / R-50 | 已实现 |
+| 10 | 各板块默认收起，手动打开，刷新后保持上次状态 | 2.54 + D-85 + R-53 | 已实现 |
+| 11 | 计划池里的任务保留 Bonus 标识 | 2.49 + D-79 | 已实现（只读标识，池里仍不提供 Bonus 开关） |
+
 **2026/10/7 v2.11**
 
 对应 `doc/v2/requirements.txt` **最前面两条**（v2.10 之后补充的两条手机端排版收尾），以及 `doc/v2/FS.md` v2.11。**完全不改存储格式**：`schemaVersion` 仍为 1，`Store.serialize` 的输出与 v2.10 逐字节同构，没有新增任何字段。两条都是**手机端排版** —— 一条是文字格的 CSS 上限，一条是渲染层给右侧控件加一个包裹盒子 —— 因此 v2.1–v2.10 导出的 JSON 都能照常导入，v2.11 导出的文件老版本也读得下。
@@ -1241,6 +1267,456 @@ v2.10 需求 4 给四类行容器加了 `flex-wrap: wrap`、给五个文字格�
 | 数据格式 | **没有**新增任何字段 | 同左，与 v2.1–v2.10 的 JSON 双向兼容 |
 | 同步到 APK | — | `npm run sync:web` → `npm run android:sync` |
 
+## 十三、v2.12 的十一条需求怎么实现
+
+十一条落在四类改动上：**一条口径修正**（1）、**四个新板块**（2、3、4、5）、**四处处手感与规则**（6、7、8+9、10）、**一处渲染补齐**（11）。全部延续既有分层：数据在 `store.js` / `task-ops.js`，排版在 `render.js`，接线在 `app.js`，导出在 `exporter.js`，没有新模块。
+
+### 2.48 新条目的默认时段与按完成时间排序（需求 8、9）
+
+**需求原话**：需求 8「新添加的任务或阶段自动分配时间：如果是第一、第三象限，自动分配为当前添加的时间段: 8:00前默认早上，8:00~12:00默认上午，12:00~14:00默认中午，14:00~17:00默认下午，17:00~19:00默认傍晚，19:00之后默认晚上。如果是第二、第四象限，默认晚上」；需求 9「每次新添加完任务或阶段之后，各个任务请按照完成时间排序。其中带有多个阶段的任务，请根据其中完成时间最晚的时间作为这个任务整体的完成时间，来决定这个任务应该排在什么位置。任务块不需要根据完成时间来排序」。
+
+**「完成时间」是什么**：本应用里任务 / 阶段身上唯一与「什么时候做」有关的结构就是**六值时段**（`slot`，`CONFIG.SLOTS`）—— 行上那个下拉选它、时间视图按它分组。所以需求 9 的「按完成时间排序」= 按 `SLOTS` 的先后排：早上在前、晚上在后（见 D-78）。
+
+**不新增任何字段**：`slot` 是 v1 就有的可选字段。需求 8 只是把它从「用户自己去选」改成「新条目一定带上」，需求 9 只是「按它排」。老数据里那些没设时段的条目原样不动（排序时排在同组最后）。
+
+#### 默认时段（需求 8）
+
+`task-ops.js` 的 `defaultSlotFor(quadrantId, nowDate)`：
+
+- 象限是 `I` / `III` → `CONFIG.SLOTS[Util.slotIndexByClock(nowDate)]`；
+- 其余（`II` / `IV`，以及**认不出来的象限 id**）→ `CONFIG.SLOTS[5]`（晚上）。
+
+`Util.slotIndexByClock(date)` 放在 `util.js`：它是**纯算**（`util` 是最底层、不依赖 `CONFIG`，所以只返回序号 0~5，中文串由 `CONFIG.SLOTS` 给），六段边界按需求原话切，**左端点归后一段**（12:00 算中午、17:00 算傍晚、19:00 算晚上、8:00 算上午）。
+
+**为什么用一个可注入的 `nowDate`**：Node 里没有「现在」，测试要把「14:30 加的任务」钉死（`addTask(data, date, 'I', 'x', new Date(2026, 9, 11, 14, 30))`）。不传就是 `new Date()`，运行时行为与从前一致（`createdAt` 那边本来也是这么做的）。
+
+**为什么要给认不出的象限兜底成晚上**：需求 8 说「新添加的任务或阶段**自动**分配时间」，兜底成「无时段」会让这条需求时灵时不灵，而且那种「有的新任务有、有的没有」最难查。宁可给个保守的值（晚上 = 一天的最后），用户改一下就好。
+
+#### 排序（需求 9）
+
+`addTask` / `addStage` 收尾各调一次 `sortQuadrantByTime(data, dateStr, quadrantId)`；真正的排序在 `sortTasksByTime(list)`：
+
+```
+① 把非块条目的**下标**记进 holes，条目收进 tasks；
+② tasks 按复合键排：
+     第一键：progressOfItem(x).isComplete ? 1 : 0      （未完成在前）
+     第二键：itemSlotRank(x)，-1 的当 CONFIG.SLOTS.length（没设时段排最后）
+     第三键：原来的下标（同键保持原先后）
+③ 按下标逐个写回：list[holes[k]] = tasks[k]
+```
+
+三条都值得说明：
+
+- **第一键是「是否全完成」**：需求 6 的「完成沉底」把「未完成在前、已完成在后」写成了数据里的顺序（D-46），需求 9 又要「按完成时间排」—— 两条在「早上做完的任务」对上「晚上没做的任务」时会打架。定成「先分层、再排序」，两条同时成立（见 D-78）。
+- **`itemSlotRank`**（需求 9 后半句）：有阶段的任务取**最晚**那个阶段的时段（「根据其中完成时间最晚的时间作为这个任务整体的完成时间」）；没阶段的任务取自己的；都没有 → -1。
+- **块的位置一个下标都不动**：需求原话「任务块不需要根据完成时间来排序」。实现上是「留洞」而不是「把块抽出去排完再塞回来」—— 抽出去会让块的相对位置漂移（它会被挤到别处），留洞是逐字照需求：块就待在它原来的下标上，排序只在**任务占的那几个位置**之间换。
+
+**第三键写成显式比较而不是依赖 sort 稳定**：ES2019 起 `Array.prototype.sort` 是稳定的，但安卓 WebView 的版本参差（Capacitor 6 最低支持到 API 22 那批老 Chromium）。显式带上原下标，就把「同一时段里新加的那条仍在最前」这条写死了 —— 不加的话，在不稳定的实现上它会随机漂到同时段的中间（见 R-49）。
+
+**排序只作用在刚加的那条所在的象限**：`addTask` 传的就是 `quadrantId`；`addStage` 传的是 `located.quadrantId`（阶段所在任务的象限）。别的象限一个下标都不动 —— 跨象限本来就没有「先后」可言。
+
+**连带效果（需求 9 想要的）**：`addStage` 之后重排，会把**父任务**挪位 —— 因为它的「整体完成时间」变了（新阶段可能更晚）。这正是需求 9 第二句要的效果。副作用是「刚给一条任务加了个晚上的阶段，这条任务自己往下挪了」，看着像被谁动了一下 —— 文档写明（FS 三十四、R-50）。
+
+**和「新增任务加在开头」的关系**：`addTask` 仍然是 `unshift`（D-50），排完序之后同键的条目保持稳定，所以「同一时段里新加的那条仍在最前」这两条同时成立。
+
+### 2.49 计划池：勾完更新完成时间 + Bonus 标识（需求 7、11）
+
+**需求 7 原话**：「计划池的完成时间，请在勾选完成之后更新」；**需求 11 原话**：「计划池里的各个任务保留Bonus标识」。
+
+#### 勾完更新完成时间
+
+池内那一行显示的日期就是这条任务的完成时间（`plannedDate`，v1 就定成「完成时间」，见 v1 FS）。需求要的是：**它被勾成完成的那一刻，更新成当天**。
+
+`task-ops.js` 新增一个只有一个动作的小函数：
+
+```js
+function stampPoolCompleted(item) {
+  if (!item) return;
+  item.plannedDate = Util.todayStr();
+}
+```
+
+调用点两处（都是「未完成 → 已完成」这个方向）：
+
+| 入口 | 盖在哪几条上 |
+|---|---|
+| `togglePoolItem`（行上的勾选框） | 这条任务自己 |
+| `togglePoolBlock`（池内块头的一键全勾） | **块内每条翻上去的任务**（不是块本体 —— DDL 以任务为单位，D-51 不变） |
+
+- **取消勾选不调用**：和「完成沉底之后取消不移回」是同一条规矩（D-47），只朝完成方向动。
+- **用真实今天**（`Util.todayStr()`）而不是正在查看的日期：完成这件事发生在当下，和阅读栏勾完自动记今天同一条口径（2.37 / D-67）。
+- 池内块本体**没有** `plannedDate`（D-51），所以它自己不被盖 —— 池内块头显示的进度条里也不含日期。
+
+#### 连带的一条：已完成的池条目不参与自动导入（2.35 修订）
+
+不这么定就会出现一个很别扭的连锁：勾完当天它的 `plannedDate` 变成今天 → 「计划日期 ≤ 真实今天」这条到期判据**立刻成立** → 下一次启动 / 切日期，它被 `autoImportDuePoolItems` 搬进今天的 Q-II。于是「池里勾完不移出池」（2.35 的既有口径）第二天就被推翻了，而且用户会觉得「我明明做完了，怎么又冒出来一条」。
+
+所以 `autoImportDuePoolItems` 里加一句早退：
+
+```js
+if (progressOfItem(pool[i]).isComplete) continue;   // 已完成的池条目不自动导入
+```
+
+- 只跳过**已完成**的；未完成的照旧按日期到期自动进象限。
+- **手动导入 / 拖回不受影响**（它们走 `restoreFromPool`）—— 「我就是要把它搬进象限」是明确意图，不该被这条挡住。
+- 判据用 `progressOfItem`（块看块内、任务看阶段或自己），和全项目那条「只有一个进度算法」的规矩一致。
+
+#### 保留 Bonus 标识（需求 11）
+
+推迟 / 拖进池搬的是**同一个对象**，`bonus` 字段一直跟着走（v2.1 起就是这样），所以这一条是**渲染补齐**、不是数据修复：`render.js` 的池内任务行（`buildPoolItemHtml`，池顶层任务与池内块内任务共用它）在 `task.bonus === true` 时，于 `.task__actions` 里画一个只读的 `<span class="bonus__mark" title="Bonus">🎁</span>` —— 和 `buildTimeViewItemHtml` 里那个是**同一个类名、同一个长相**。
+
+**只读，不给开关**：池里不画时段 / Bonus 那套控件是 D-61 定下的（池是「还没安排」的地方）。需求要的是「标识仍在、对得上账」，不是「在池里能改」；要改回象限改。
+
+### 2.50 小文件（需求 2）
+
+**需求原话**：「加一个小入口，点开之后是我存的一些小文件（提示总共不能超过1M空间或10个文件），允许像任务信息一样被导入和导出，只支持txt格式」。
+
+#### 数据
+
+```json
+"files": [ { "id": "id_…", "name": "备忘.txt", "text": "…", "createdAt": 1760000000000 } ]
+```
+
+- 顶层**可选**字段：老数据没有 → `normalize` 补空数组（和 `pool` / `templates` / `reading` 同一条取舍），`schemaVersion` 不动。
+- **为什么放进主数据，而不是像主题 / 折叠那样单开一个 storage key**：判据是 D-53 那条 —— 它是**用户数据**（要随 JSON 导出 / 导入、要进滚动备份、要跟着安卓 durable 副本走），不是「这台设备看着顺手」的界面状态。代价是主数据会变大，见 R-48。
+- 清洗（`store.normalizeFileItem`）：`name` 去空白后必须非空（一排没名字的文件没法认）；`text` 只接受字符串，其余收成空串 —— **空正文是合法的**（空文件也是文件，和「任务文本不能为空」不是一回事）；`createdAt` 兜底。
+
+#### 数据层（`task-ops.js`）
+
+| 函数 | 行为 | 失败 |
+|---|---|---|
+| `ensureFiles(data)` | 缺表 / 不是数组就地补齐 | — |
+| `findFile(data, id)` | 返回 `{ item, index }` | `null` |
+| `addFile(data, name)` | 只要求名字，正文从空串开始（新建后点进正文编辑器写） | `EMPTY_TEXT` |
+| `renameFile(data, id, name)` | 改名 | `NOT_FOUND` / `EMPTY_TEXT` |
+| `setFileContent(data, id, text)` | 覆盖正文（**允许空串**） | `NOT_FOUND` |
+| `removeFile(data, id)` | 删 | `NOT_FOUND` |
+| `getFilesStats(data)` | `{ count, bytes, over }`，`bytes` = 逐条 `Util.utf8ByteLength(name + text)` 之和 | — |
+
+- `bytes` 用 `Util.utf8ByteLength` 而不是 `String.length`：中文一个字在 UTF-16 里算 1、写进 localStorage 是 3 字节，用 `length` 算出来的「1MB」和真实占用差一倍以上，提示就成了假数字。
+- **同名不判重**：同一个名字存两份是用户自己的自由。导入判重那条规矩（D-09）针对的是任务 / 池 / 阅读栏，不搬到这里。
+
+#### 导入 / 导出（「像任务信息一样」）
+
+- **导入**：`index.html` 里一个隐藏的 `<input type="file" accept=".txt,text/plain">`（和 JSON 导入同一个套路，`app.js` 的 `bindFiles` 里 `FileReader.readAsText(file, 'utf-8')`）。**只认 `.txt`**，判据是**文件名后缀**（`Util.isTxtFileName`）而不是 MIME —— 手机上 MIME 常常是空串或 `application/octet-stream`，认 MIME 会把合法文件挡在外面；非 `.txt` 拒绝并提示。导入进来的文件名去掉路径后直接当条目名。
+- **导出**：`Exporter.exportTextFile(name, text)` → 文件名 = `Util.safeFileName(name)` + `.txt`（去掉 `/ : * ? " < > |` 与控制字符、首尾空白和点，全被清光就用 `untitled`），内容按 UTF-8 编码，走**既有**的 `download()` —— 网页版 `<a download>`、APK 走原生插件 `ExportFile`（v2.1 的 D-49 一条不变）。
+  - 名字**不以 `.txt` 结尾就补一个**：所以条目名叫「备忘.md」导出的是 `备忘.md.txt` —— 「只支持 txt 格式」这条口径从导出这一侧也守住（不然导出的就不是 txt 了）。
+  - **导入端另有一道硬拦**：单个文件超过 1MB 直接拒绝并提示。这一条**超出了「提示」二字**，是故意的（见 R-48）：主数据整份进 localStorage，还带 4 份滚动备份与安卓 durable 副本，塞一个大文件进去会把配额吃光，**连带把正常任务的保存一起挡下来**。10 个 / 1MB 的**总量**仍是软提示（需求原话），只有「单个文件 > 1MB」这一条是硬闸。
+
+#### 渲染与交互
+
+- 底部新板块 `#files`（排在模板池后面）：头部 = 收起三角 + 「📄 小文件」+ 用量 `n/10 个 · x KB / 1 MB`（`getFilesStats().over` 时加 `--over` 标红并给 title 说明）+ 「导入」+ 「＋」。
+- 行 = 文件名（**点击打开正文编辑器**）+ 「✎改名」+ 「导出」+ 「×删除」。正文不在行上画（可能几百行），改由**弹层编辑器**处理：`render.openEditor(options, text, onSave)` —— 复用 `openText` 那套模态骨架（`ensureConfirmHost`），把只读 textarea 换成可编辑的，多一个「保存」。这是本版唯一新增的交互形态，理由就是「多行正文放不进行内编辑」（见 D-80）。
+- 列表容器 `.files__list` **必须登记进 `Render.SCROLL_SLOTS`**：它是可滚面板，漏登记的话以后在这个面板里做勾选类操作时位置会被弹回顶部（R-52，`test-scroll-keep.js` 会自动核对 CSS ↔ 登记表）。
+- 用量提示是**软的**：`over` 只改颜色和 title，第 11 条照样加得进去（和阅读栏的「建议不超过 3 项」同一条口径，D-64）。
+
+### 2.51 原则池与「参考原则」（需求 3）
+
+**需求原话**：「加一个原则池。类似于阅读池，但是可以简化，去掉时间相关信息的记录。被归档的原则列表命名为"参考原则"」。
+
+#### 数据
+
+```json
+"principles": { "active": [ { "id": "id_…", "text": "先做重要的事", "createdAt": 1760000000000 } ],
+                "archived": [ … ] }
+```
+
+- 结构照抄 `reading`（上下两张表），但**一个时间字段都没有**：没有 `start`、没有 `doneAt`、归档也不记时间戳 —— 需求原话「简化，去掉时间相关信息的记录」。
+- **「在哪张表」就是唯一的归档判据**：因为没有任何和所在表可能矛盾的字段，所以不需要像阅读栏那样在 `normalizeReading` 里「强制对齐」（R-35 那条风险在这里天然不存在）。
+- 顶层可选字段：老数据没有 → 补 `{ active: [], archived: [] }`。
+
+#### 数据层（`task-ops.js`）
+
+形状与阅读栏那一组一一对应（照着写，不另创一套）：
+
+| 函数 | 行为 | 失败 |
+|---|---|---|
+| `ensurePrinciples(data)` | 缺表 / 表不是数组就地补齐 | — |
+| `findPrincipleItem(data, id)` | 两张表里找一条，返回 `{ item, list, archived }` | `null` |
+| `addPrinciple(data, text)` | 加进 `active` 末尾 | `EMPTY_TEXT` |
+| `editPrinciple(data, id, text)` | 改名 | `NOT_FOUND` / `EMPTY_TEXT` |
+| `archivePrinciple(data, id)` | `active` → `archived` **开头**；已在归档表里则空操作 | `NOT_FOUND` |
+| `restorePrinciple(data, id)` | `archived` → `active` **开头** | `NOT_FOUND` |
+| `removePrinciple(data, id)` | 删 | `NOT_FOUND` |
+| `getPrincipleStats(data)` | `{ active, archived }` | — |
+
+- **不做数量提示**：需求没提上限。阅读栏那个「建议不超过 3 项」是它自己需求里写的（D-64），不搬过来 —— 照着需求做，不多做。
+- 归档搬到**开头**：和阅读栏「刚读完的排最前」同一条。（需求只说了「归档」，落点是本次定的默认，见 5.3。）
+
+#### 渲染与交互
+
+- `#principles` 板块（底部）：头部（收起三角 + 「⚖ 原则池」+ 计数 + 「＋」）；「正在遵循」列表 `.principles__list`；下方 **「参考原则」** 小标题 + `.principles__archived-list`（需求点名的名字，写在渲染层的小标题里）。
+- 行 = 勾选框（勾 = 归档）+ 文字（点击改名）+ 「×」；归档表里那行是 「↩」+ 文字 + 「×」。
+- `bindPrinciples()` 独立绑 `#principles` 子树（和 `bindReading` 一个形状）；改名复用 `task__input` 与 `commitEdit` 的 `edit-principle` 分支；新增走 `add-principle`（**必须列进 `commitEdit` 的「新增」分支外层条件**，R-38 那个坑）。
+- 两个列表容器都进 `SCROLL_SLOTS`（R-52）。
+- **保护模式**：写控件进 `body.is-readonly` 名单，四个写函数进门判 `Store.isProtectionMode()`。
+
+### 2.52 技能池与两份清单的导出（需求 4、5）
+
+**需求 4 原话**：「写一个技能池，可以自己添加自己认可的新 get 到的技能进去，同时可以编辑日期，日期默认为添加该技能的日期」；**需求 5 原话**：「允许导出技能池和已阅读书籍的清单为txt/markdown文件」。
+
+#### 数据
+
+```json
+"skills": [ { "id": "id_…", "text": "用 Pointer Events 做拖拽", "date": "2026-10-11", "createdAt": 1760000000000 } ]
+```
+
+- `date` 是**可选**的 `'YYYY-MM-DD'`：加进来时默认**当天**，之后可改、可清成「未设定」（`null`，不是空串 —— 和阅读栏 / 池里同一条口径）。
+- 顶层可选字段：老数据没有 → 补空数组。
+
+#### 数据层（`task-ops.js`）
+
+| 函数 | 行为 | 失败 |
+|---|---|---|
+| `ensureSkills(data)` / `findSkill(data, id)` | 取表 / 找一条 | `NOT_FOUND` |
+| `addSkill(data, text, date)` | 加进末尾；`date` 不传 / 空 / 非法 → `Util.todayStr()` | `EMPTY_TEXT` |
+| `editSkill(data, id, text)` | 改名 | `NOT_FOUND` / `EMPTY_TEXT` |
+| `setSkillDate(data, id, dateStr)` | 设 / 改日期；传 `null` / 空串 → 清成 `null` | `NOT_FOUND` / `BAD_DATE` |
+| `removeSkill(data, id)` | 删 | `NOT_FOUND` |
+| `getSkillStats(data)` | `{ count }`（只有个数，没有上限，不做提示） | — |
+
+**写路径只认合法日期**（`Util.isValidDateStr`）：坏日期（`2026-13-01`、`十月一号`）一律 `BAD_DATE` 拒掉、原值不动。读路径（清洗）则宽松地把脏日期收敛成 `null`，不拒整份数据（和 `plannedDate` 同一条取舍）。
+
+#### 渲染与交互
+
+- `#skills` 板块（底部）：头部（收起三角 + 「🛠 技能池」+ 计数 + 「＋」）；行 = 文字（点击改名）+ **日期按钮** + 「×」。
+- 日期控件**和计划池的完成时间同一套**：`skills__date` / `skills__date--empty`（未设定时灰色斜体）/ `skills__date-input`（`<input type="date">`）/ `skills__date-clear`（文案「清除」），CSS 与 `pool__date` 系列逐条一致 —— 同一个东西不该做成两样（D-69 / D-70 的理由照搬）。
+- 日期框**必须进 `commitEdit` / `focusEditor` 的选择器清单**：R-40 的教训就是「按 mode 逐个挑输入框，新加一种框忘了登记 → 读到空值 → 把刚选好的日期清成 null」。清单只有一处（`'.stage__input, .task__input, .pool__date-input, .reading__start-input, .skills__date-input, .files__name-input'`），并且有自动守卫盯着（见 2.56 / R-54）。
+- 列表容器 `.skills__list` 进 `SCROLL_SLOTS`。
+
+#### 两份清单的导出（需求 5）
+
+放 `exporter.js`（**纯函数**，Node 里能测；和 `buildMarkdown` / `statsLine` 同一层 —— 数据层只管数据，「排成人能看的文本」是导出层的事）：
+
+| 函数 | 内容 |
+|---|---|
+| `buildSkillsList(data)` | `# 技能清单` + 一行一条：`- 文字（2026-10-11）`；没设日期就不带括号；一条都没有时给「（技能池还是空的）」 |
+| `buildReadingList(data)` | `# 已读书籍清单` + 只取 `reading.done`，一行一本：`- 书名（2026-10-01 → 2026-10-05）`；**起始与完成相同 / 起始没设 → 只写一个日期**（和阅读栏同一条口径，D-68）；一本都没有时给「（还没有读完的书）」 |
+| `exportSkills(data)` / `exportReadingList(data)` | 起名 `技能清单-<今天>.md` / `已读书籍清单-<今天>.md`，走既有 `download()` |
+
+- **为什么是 `.md`**：需求写的是「txt/markdown文件」，两者选一即可；`.md` 的内容就是朴素的 `- ` 列表文本，当纯文本看、当 markdown 渲染都成立。要换成 `.txt` 只改文件名后缀一处（见 5.3）。
+- **入口**：`index.html` 的导出菜单加两项（`data-format="skills"` / `data-format="reading"`），`app.js` 的 `doExport` 加两个分支。**不传当前查看的日期** —— 技能池和阅读栏都跟日期无关。
+- 两份清单**不进日报**（它们是清单，不是「今天干了什么」）—— 这正是需求 1 那条约束的延伸。
+
+### 2.53 日报（routine）只记象限内容（需求 1）
+
+**需求原话**：「routine部分不需要包含计划池等等，只需要包含象限池的内容」。
+
+**先说我怎么理解「routine」**：本应用里唯一成文的「日报」产出就是**导出** —— Markdown（`.md`）和 PDF（打印页，内容与 Markdown 同一份），本应用没有独立的日报页（2.15 就写明了）。需求这句里的「routine 部分」指的只能是它。这条解读**没有用户正面确认**，记在 5.3。
+
+**现状**：`Exporter.buildMarkdown` 与 `Pdf.buildPrintHtml` **本来就只画四象限**（任务 / 块 / 阶段 + 当日统计行），从来不画池。反倒是 FS「六、统计与日报」里写着「日报要包含待办池 / 周计划 / 月计划里的任务，不只是象限里的」—— 那句从未落地。所以这一版的动作是三件：
+
+1. **把 FS 那句改口**（FS 六 + 「二十八」）：日报只含四象限，新板块一律不进；
+2. **立一条回归守卫** `test-report-scope.js`：
+   - 行为侧：给一份「池 / 模板 / 阅读栏 / 原则池 / 技能池 / 小文件都有货、四象限也有货」的数据，断言 `buildMarkdown` / `buildPrintHtml` 的输出里**不出现**这些板块的任何文本；
+   - 源码侧：断言两个构建函数体里没有去读 `pool` / `templates` / `reading` / `principles` / `skills` / `files` —— 以后谁照着旧 FS 那句把池塞进日报，测试直接红；
+3. **新板块从第一天起就不进日报**。
+
+**为什么值得单独做一条测试**：这是一条**口径**，不是一处代码 —— 口径没有守卫就会漂回去（v2 早期那句 FS 就是活例子）。
+
+### 2.54 板块默认收起（需求 10）
+
+**需求原话**：「无论象限视图还是时间视图，各个板块（包括计划池、模板池和阅读池）都要默认关闭状态，需要手动点击后才能打开。首次打开后，下一次刷新时保持上次的最新状态（即保持打开或关闭）」。
+
+#### 问题出在哪
+
+`collapsedPanels` 记录的是「**收起**了谁」（2.38 定的），空表 = 六个都展开。而「从没记录过」和「记录过、但用户把六个都点开了」在旧实现里都是**空表** —— 两条路给出同一个值，就没法表达「默认收起」了。
+
+#### 改法：把两种「空」分开
+
+| 情况 | `getFoldState().collapsedPanels` | app.js 的取值 |
+|---|---|---|
+| 没有 `foldState` 这个 key（新用户） | **`null`** | `null \|\| defaultCollapsedPanels()` → **六个全收起** |
+| 老版本存的 JSON 里没有 `collapsedPanels` 这一项 | **`null`** | 同上 |
+| 值坏掉（不是对象 / JSON 坏了） | **`null`** | 同上（界面状态存坏了最多回默认，D-53） |
+| 记录过、是空表 `{}` | `{}` | 六个都展开 |
+| 记录过、里面写着几个 | 原样 | 那几个收起，其余展开 |
+
+`app.js` 启动时：
+
+```js
+var fold = Store.getFoldState();
+state.collapsedPanels = fold.collapsedPanels || defaultCollapsedPanels();
+```
+
+`defaultCollapsedPanels()` 按 `CONFIG.PANEL_IDS` 逐个置 `true` —— 加了新板块不用回来改这里（这是「别写死名单」那条老规矩）。
+
+#### 为什么这一条不能反过来记录（记「展开了谁」）
+
+反过来（记 `expandedPanels`）也能表达默认收起，但要**改存储的语义**：老用户本机那份 `collapsedPanels` 会当场变成一条谁也读不懂的旧数据，而且 `togglePanel` / `setCollapsedPanels` / 测试全都要跟着改。用 `null` 表达「从没记录过」是**最小改动**：只多一个取值，其余一个字不动。
+
+#### 其余
+
+- **只开了计划池**这种状态下，`persistFoldState()` 写进去的是「整份 `state.collapsedPanels`」—— 里面其余五个仍写着收起。刷新后完全复现（需求「保持上次的最新状态」）。
+- **新板块一并默认收起**：`CONFIG.PANEL_IDS` 扩到六个（reading / pool / templates / principles / skills / files）。需求原话是「各个板块（包括……）」，新板块属于「各个」。（若只想让原有的三个默认收起，改 `defaultCollapsedPanels` 一处即可，见 5.3。）
+- **不碰主数据**：`collapsedPanels` 一直住在 `foldState` 那个独立 key 里（D-53 / 2.38），导出的 JSON 里没有这一项。
+- **收起三角在保护模式下照常能点**：纯界面动作（2.38 定的那条，反向守卫仍在）。
+- 新增的三个 `<section>` 也要有 `.<id>[hidden]` 守卫（那两个视图切换用的），`test-layout.js` 会核对。
+
+### 2.55 模板池：单击改名 + 双击高亮（需求 6）
+
+**需求原话**：「优化模板池的改名方式，改成单击改名，双击Highlight（Highlight方式和之前的任务Highlight一样）」。
+
+#### 单击改名
+
+- `render.buildTemplateItemHtml` **去掉 `tpl__rename` 按钮**（需求把「改名」这个动作从按钮搬到了名字上），名字 span 换成可点的 `.tpl__name`（它本来就叫这个类名，只是以前不可点）。按钮与它的样式一起删掉（`css` 里 `.tpl__rename` 那条），`.tpl__name` 加 `cursor: text` 提示「这行字点得动」，并进保护模式的 `pointer-events: none` 名单（高亮是写操作、改名更是，保护模式下两样都不能落）。
+- `app.js` 的 `bindTemplates` 加一条：「点 `.tpl__name` → `startRenameTemplate(id)`」。
+- 改名那套（编辑态 `rename-template`、`commitEdit` 分支、回车 / 失焦 / Esc、改空拒绝保留原名）**一个字没动** —— 它是 v1 就有的（D-31 / D-41）。
+
+#### 双击高亮
+
+**完全复用任务那一套**（需求原话「Highlight方式和之前的任务Highlight一样」有些取舍直接照搬，不另写）：
+
+| 复用点 | 说明 |
+|---|---|
+| 数据字段 | 模板自己的**可选布尔** `highlight`（`store.normalizeTemplate` / `importer` 只认 `=== true`；老文件没有 → 没高亮） |
+| 手势 | 同一份 `state.clickHit` + 同一个 `DOUBLE_CLICK_MAX_MS = 1500` + 同一个 `isControlNode`（点按钮 / 输入框上不记落点） |
+| 判定 | 三处（象限 / 时间视图 / 池）之外再加**第四处**：`bindTemplates` 的点击分流最前面加 `if (e.detail >= 2) { handleSecondClick(); return; }`，并记 `hitOfTemplate`（`{ list: 'tpl', kind: 'template', templateId }`） |
+| 落点解析 | `findHighlightTarget` 多一条 `hit.list === 'tpl'` 分支（查 `TaskOps.findTemplate`），`doToggleHighlight` 多一个 `TaskOps.setTemplateHighlight` 的调用 |
+| 样式 | `.tpl__item--highlight .tpl__name` 用同一组声明（`--hl-bg` / `--hl-text` / `padding: 0 3px` / `margin: 0 -3px`） |
+
+- 数据层新增 `task-ops.setTemplateHighlight(data, templateId, highlight)`：置 / 删字段，`NOT_FOUND`。**不调任何 sync** —— 高亮不改分母、不改排序、不改模板的 items（和 2.40 的四条 set 函数同一条理由）。
+- **没有 `:not(--done)`**：模板没有「完成」态，所以高亮不会自动失效 —— 这正是它和任务高亮的唯一区别（再双击一次取消）。
+- **保护模式下点不动**：`doToggleHighlight` 进门就判（复用同一条早退）。
+- 模板**不进统计、不参与拖拽**：高亮只是标记（2.40 那条口径）。
+
+### 2.56 v2.12 测试策略汇总
+
+十一条里，需求 1、8、9、10、11 能做**真数据测试**（数据层 + 纯函数），需求 2、3、4、5、6 的数据层也能真跑，剩下的渲染 / 交互 / 样式按本项目的既有办法用**源码守卫 + CSS 守卫 + 真实渲染字符串断言**锁形状（node 里没有 DOM）。
+
+| 新增 / 改动 | 项数 | 覆盖什么 |
+|---|---|---|
+| `test/test-auto-slot.js`（新增） | — | 需求 8：`Util.slotIndexByClock` 六段边界（7:59/8:00/11:59/12:00/13:59/14:00/16:59/17:00/18:59/19:00/23:59 各一条）；`defaultSlotFor` 的 I/III 跟钟点、II/IV 晚上、脏象限兜底晚上；`addTask` 带上的 slot、`addStage` 按**所在象限**算。需求 9：未完成在前 / 同组按时段 / **带阶段按最晚阶段定位** / 没设时段排最后 / **块位置不动**（逐下标比对）/ 同一时段新加的仍在最前 / 单条与全块是空操作 / 只影响所在象限 |
+| `test/test-pool-v12.js`（新增） | — | 需求 7：`togglePoolItem` 勾完 `plannedDate === 今天`、取消勾选**不改**、块头一键全勾把块内每条都盖成今天、块本体不被盖；已完成的池条目**不参与自动导入**（连跑两次仍不动它）、未完成的照常导入；需求 11：池内顶层任务 / 块内任务带 🎁、没 bonus 不画、只读（没有切换按钮） |
+| `test/test-files.js`（新增） | — | 需求 2：数据层增删改查（空正文合法 / 空名字拒绝 / 改名 / 换正文 / 删）；`getFilesStats` 的 count 与 **UTF-8 bytes**（中文按 3 字节算）；`over` 的两条判据（>10 个 / >1MB）；渲染（头部用量与 `--over`、行、空态、转义）；`Util.safeFileName`（非法字符 / 空名兜底 / 超长截断）与 `isTxtFileName`（大小写 / 前后空白 / 非 txt）；`Exporter.exportTextFile` 的文件名与字节；JSON 往返 + 老文件（没有 `files`）导入不受影响 |
+| `test/test-principles.js`（新增） | — | 需求 3：数据层（加 / 改 / 归档到开头 / 放回 / 删 / 空文本拒绝 / `NOT_FOUND` / 条目**只有 id,text,createdAt** 三个字段 —— 钉住「没有时间」这条）；渲染（两段结构、「参考原则」标题、空态、转义）；`commitEdit` 认 `add-principle` / `edit-principle`（R-38 自动守卫那条扫清单覆盖到）；保护模式早退；JSON 往返 + 老文件 |
+| `test/test-skills.js`（新增） | — | 需求 4：`addSkill` 默认今天 / 传日期 / 空串当没传 / 空文本拒绝；`setSkillDate` 设定 / 清成 null / 坏日期拒绝且原值不动；改名 / 删除；渲染（日期按钮、未设定态、编辑框、空态）。需求 5：`buildSkillsList`（空表 / 有日期 / 没日期 / 顺序）、`buildReadingList`（空表 / 跨天写「起始 → 完成」/ 当天只写一个 / 起始没设只写完成）、`exportSkills` / `exportReadingList` 的文件名 |
+| `test/test-report-scope.js`（新增） | — | 需求 1：**行为侧** —— 六个板块都有货 + 四象限也有货的数据，`buildMarkdown` / `buildPrintHtml` 的输出里不含任一板块的文本；**源码侧** —— 两个构建函数体里不出现 `pool` / `templates` / `reading` / `principles` / `skills` / `files` |
+| `test/test-templates.js`（改） | — | 需求 6：行上**没有** `tpl__rename`、**有** `tpl__name`；`setTemplateHighlight` 置 / 删 / `NOT_FOUND`；渲染的 `tpl__item--highlight` 类；`store` / `importer` 的严格 `=== true`；`app.js` 源码守卫（`bindTemplates` 里的 `e.detail >= 2` + `hitOfTemplate` + `rememberHit`、`doToggleHighlight` 的 tpl 分支）；CSS 守卫（`.tpl__item--highlight .tpl__name` 与任务那组同源） |
+| `test/test-fold-state.js`（改） | — | 需求 10：`getFoldState` 的 null 语义（从没存过 → `null`；存过空表 → `{}`；垃圾值 → `null`）；`app.js` 里 `|| defaultCollapsedPanels()` 那条与 `defaultCollapsedPanels` 按 `PANEL_IDS` 遍历 |
+| `test/test-layout.js`（改） | — | 新板块的 `<section>` / 唯一 id / `[hidden]` 守卫；`#files` / `#principles` / `#skills` 排在 `#templates` 之后；六个板块头上都有收起三角 |
+| `test/test-scroll-keep.js`（改） | — | 三个新板块的滚动容器（`.files__list` / `.principles__list` / `.principles__archived-list` / `.skills__list`）都登记进 `SCROLL_SLOTS`、固定键 |
+| `test/test-store-serialize.js` / `test-theme.js` / `test-fold-state.js`（各改 1 条） | — | 主数据 key 集合补上 `principles` / `skills` / `files`（这三个是**真数据**，和 `pool` / `reading` 同类，所以预期集合要一起更新） |
+| `test/test-reading.js`（改 1 条） | — | `CONFIG.PANEL_IDS` 从「就是那三个」改成「六个都在、顺序 = 页面顺序」 |
+| `test/test-style-guards.js`（改） | — | 新板块的最大高度 + `overflow-y: auto`；模板高亮那条 CSS |
+
+全量与逐文件项数以 `node tools/run-tests.js` 的输出为准（都跑绿）。既有 1080 项里只改「主数据 key 集合 / `PANEL_IDS` 名单 / 模板行按钮 / `collapsedPanels` 默认值」这几处断言 —— 都是本版**明确改掉的口径**，不改是为了迁就实现。
+
+### 2.57 顺带修掉的一处既有缺陷：归档会把阅读栏清空（v2.12 附带）
+
+`Store.applyArchive` 是「30 天归档」里构造新数据的那一步，它只搬 `dates`、`pool`、`templates`，**漏了 `reading`** —— 于是用户点一次「归档并下载」，阅读栏（正在阅读 + 已读完成）就被换成一张空表。这不是本版需求带来的，是 v2.8 加阅读栏时漏改的（当时 `applyArchive` 没跟着更新）。
+
+修法：**归档只收缩 `dates`**（那才是按天堆起来的东西），其余全局板块整份带走 —— `pool` / `templates` / `reading` / `principles` / `skills` / `files` 六个一起。本版新加的三个板块如果照旧走漏，就是「刚存进去的原则 / 技能 / 小文件，下一次归档凭空消失」，所以这条必须一起修。
+
+- 归档出来的 JSON（`buildArchivePayload`）仍然**只有 `user` / `schemaVersion` / `dates`** —— 归档文件是「历史那几天的任务表」的存档，不是整份备份（整份备份走「导出 JSON」）。`test-store-archive.js` 新增断言把这两头都钉住：归档后本地六个板块都在、归档文件里不多带别的。
+
+## 十四、v2.13 的那条需求怎么实现
+
+### 2.58 每一块板都能折叠 / 展开并记住状态（v2.13 需求）
+
+**需求原话**：「每个板块都要可以折叠或者打开。比如说我现在是折叠的，我点打开，下一次再进这个 APP 时，它默认就应该是打开状态，反之亦然。每个板块都应该要这样（四象限的每一个象限、时间视图的每一个时段块都算在内）。这条是针对移动端 APK 版本的；网页版能做就做、尽量做一下 —— 网页版象限还有时间模式下是一排放两个栏，折叠之后那块版面你看怎么搞比较方便就行。」
+
+#### 先把「板」分清楚：两类，两套默认
+
+| 类别 | 谁 | 默认 | 状态存在哪 |
+|---|---|---|---|
+| **六个大板块** | 阅读栏 / 计划池 / 模板池 / 原则池 / 技能池 / 小文件 | **收起**（v2.12 需求 10） | `foldState.collapsedPanels`（v2.8 就有） |
+| **板**（本版补齐） | 四象限的**每一个象限**、时间视图的**每一个时段块** | **展开**（一进 App 就要看见今天的任务） | `foldState.collapsedBoards`（**本版新开的一张表**） |
+
+两类都满足需求那句「每个板块都要可以折叠或者打开 + 下次进来保持」，差别只在出厂默认 —— 需求这次点名的是象限与时段块，那两块**不能**默认收起（默认收起等于每次进来都要点四下才看得见今天的任务）。
+
+#### 为什么另开一张表，而不是塞进 collapsedPanels
+
+**因为两套默认值相反**。`collapsedPanels` 的语义在 v2.12 被定成「`null` = 用户从没动过 → 全收起」，而板要的是「空表 = 全展开」。合成一张表就得在同一张表里表达两种默认，判据会立刻变得没法读（是"没记录过"还是"记录过、但值是空"？）。两张表各存各的，还顺带解决了另一件事：**折一个象限不该动到计划池的收起状态**（用户在两个地方各有一套自己的安排）。
+
+键的格式（进本机存储，定了就别改）：
+
+```
+象限：'q:I' | 'q:II' | 'q:III' | 'q:IV'
+时段块：'tv:早上' | 'tv:上午' | 'tv:中午' | 'tv:下午' | 'tv:傍晚' | 'tv:晚上'
+```
+
+前缀区分两类板，和「落点对象用 `region` 区分象限 / 池」是同一种做法（D-74）。渲染层用 `boardKey(prefix, id)` 拼，`app.js` 的 `toggleBoard` 反过来**按格式白名单校验**（`q:` + 合法象限 id，或 `tv:` + 合法时段名）—— `data-board` 来自 DOM，手工改过 DOM 的话什么都能塞进来（R-36 那条的老套路）。
+
+#### 数据层（`store.js`）
+
+- `getFoldState()` 多返回一项 `collapsedBoards`：**不是对象就给 `{}`**（不像 `collapsedPanels` 那样给 `null` —— 空表就是它的正确默认）；
+- `setFoldState()` 多存一项；老版本本机存的 JSON 里没有这一项 → 读回 `{}` → **全部展开**（升级上来不该突然发现象限都不见了）。
+
+#### 渲染层（`render.js`）
+
+- 新增 `boardKey(prefix, id)` 与 `boardToggleHtml(boardId, collapsedBoards)`：画一个 `<button class="board__toggle" data-board="q:I" aria-expanded="…">▾</button>`（朝向交给 CSS 转，和 `panelToggleHtml` 一致）；
+- `buildQuadrantHtml`：三角画在 `header.quadrant__head` **最左边**；`section.quadrant` 在折叠时带上 `is-collapsed`；
+- `buildTimeViewHtml`：三角画在 `h2.timeview__title` 里（图标之前）；`section.timeview__group` 折叠时带 `is-collapsed`；
+- **折叠只加一个类名，内容照旧渲染**（和六个大板块同一条口径）：展开时不用补画，也就不会出现「收起期间数据变了、展开后还是旧的」。
+
+**为什么折叠状态用 `view.collapsedBoards` 传进来、而不是像面板那样在 DOM 上 toggle**：象限和时段块**每次重画都是重新拼字符串**（数据一改就整块替换），要是靠 DOM 上 toggle 类名，重画一次就丢了 —— 面板那边能那么写是因为 `render()` 最后会调一次 `setCollapsedPanels` 补上。这里直接把类名拼进 HTML，最省事也不会漂。
+
+#### 交互层（`app.js`）
+
+- `state.collapsedBoards`（界面状态，不进主数据）+ `toggleBoard(boardId)`：白名单校验 → 翻转 → `persistFoldState()` → `renderCurrent()`；
+- 两处点击分流（`bindQuadrants` / `bindTimeView`）各加一个 `board__toggle` 分支，放在**删除 / 编辑之前**判，并且**先 `commitEdit()` 再折**（正开着编辑框时点三角，手里的字不能丢）；
+- `persistFoldState()` 与开机读回各加一项。
+
+#### 样式（`css/style.css`）
+
+- `.board__toggle` 与 `.panel__toggle` 同一个长相（含 24px 触摸目标、`transition`、`.is-collapsed` 时转 -90°）；
+- `.quadrant.is-collapsed .quadrant__body` / `.timeview__group.is-collapsed .timeview__list { display: none; }`（只留标题栏），折叠时把标题栏那条下边框去掉；
+- `.quadrant__head` 原本是 `justify-content: space-between` —— 现在头部有三个子项（三角 / 名字 / 工具区），`space-between` 会把象限名推到正中间，所以改成「工具区 `margin-left: auto` 自己顶到最右」，名字始终贴着三角；
+- **`.board__toggle` 不进 `body.is-readonly` 名单**：折叠是纯界面动作，保护模式下该照常能点（和 `.panel__toggle` 同一条，2.38 定的）。
+
+#### 网页版的 2 栏版面（需求点名要「看着办」的那件事）
+
+- 象限是 2×2 网格、时间视图一行两栏（v1 定的）。折叠其中一格时：**那一格只让自己变矮**（`.quadrants` 从 v2.2 起就是 `align-items: start`，卡片按内容高度走，不会被同行那格拉平），**旁边那格完全不受影响**，留出的空白是网格本身的空位。
+- **为什么不「让旁边那格撑满整行」**：那要给网格加一套「按折叠个数动态跨列」的规则 —— 折一格会让另外三格跟着跳位置，用户折一下整个版面重排，比留个空位更难预期。需求原话是「你看怎么搞比较方便就行」，所以取「各格自管自、谁都不动」。想改成撑满是一条独立小需求（只动 CSS 与一个状态判断）。
+- 手机端（单列）本来就没有这个问题；横屏 / 平板上走的是同一套规则。
+
+#### 回归守卫（`test/test-board-fold.js`，23 项）
+
+| 组 | 锁住什么 |
+|---|---|
+| 数据层 | `collapsedBoards` 没存过 → 空表（= 全展开）；`q:` / `tv:` 两种键往返；**与 `collapsedPanels` 互不串表**；值坏 / JSON 坏 → 回空表；传空 → 空表；仍然只占用 `foldState` 一个 key、不碰主数据 |
+| 渲染 | 四个象限各一个 `board__toggle`（`data-board="q:<id>"`，不多不少）；默认不画 `is-collapsed`；只折 I 时**只有 I 带 `is-collapsed`**；折叠时内容仍在 DOM 里；时段块同理（`data-board="tv:上午"`、只折那一块、条数照旧画） |
+| 接线 | `toggleBoard` 的白名单（`CONFIG.QUADRANT_IDS` / `CONFIG.SLOTS`）、落盘、重画；`persistFoldState` 两张表都存；开机读回；`renderCurrent` 把 `collapsedBoards` 传给**象限与时间视图两边**；两处分流都认 `board__toggle` 且排在删除键之前、且先 `commitEdit` |
+| 样式 | 两处 `display: none`、`.board__toggle` 有样式且折叠转朝向、**不在**保护模式名单里、`.quadrant__head` 不再 `space-between`（改成 `margin-left: auto`） |
+
+**顺带修了一处守卫自己的坑**：`test-style-guards.js` 的 `ruleBody()` 原来用 `css.indexOf(selector + ' {')` 取规则体 —— 本版新加的 `.timeview__group.is-collapsed .timeview__list { … }` 里带着 `.timeview__list {`，于是「时段块最大高度」那条守卫读到了 `display: none`、误报「缺 max-height」（同 DS R-41 记过的教训）。改成**按完整选择器 + 行首锚定**的正则匹配。
+
+### 2.59 v2.13 测试策略
+
+| 新增 / 改动 | 项数 | 覆盖什么 |
+|---|---|---|
+| `test/test-board-fold.js`（新增） | 23 | 上面那张表的四组 |
+| `test/test-style-guards.js`（改） | — | `ruleBody()` 改成按完整选择器匹配（如上）；既有断言一条没删 |
+| `test/test-scroll-keep.js`（改 1 条） | — | 「时段组上有 data-slot」那条不再要求整串字面量（class 后面现在可能跟 ` is-collapsed`），改成分开认 class 前缀与 data 属性；行为由 `test-board-fold.js` 用真实渲染的 HTML 兜住 |
+| `test/test-boot-smoke.js`（新增） | 5 | **启动冒烟**（见 2.60）：一套极简 DOM 桩把 `index.html` 那 14 个脚本按顺序加载，让 `app.js` 的 `boot()` 真跑一遍 —— 断言不抛异常（含 Promise 链）、**八个板块都画出了内容**、象限头上有折叠三角、全新安装时「六板块收起 / 四象限展开」 |
+
+全量：**1295 项，全部通过**（v2.12 末 1267 项，本版净增 28 项）。
+
+### 2.60 启动冒烟测试（v2.13 附带，`test/test-boot-smoke.js`）
+
+**为什么加这一条**：此前 1267 项测试**全部只测纯函数** —— 谁都没跑过「加载 14 个脚本 → `boot()` → 读数据 → 首屏 `renderCurrent`」这条链。而真机上「装完打不开 / 白屏」最常见的成因之一，就是启动链上某个元素取不到、某个函数抛异常。
+
+**做法**：node 里没有浏览器，但启动链用到的 DOM 面很小（`getElementById`、`classList`、`innerHTML`、`addEventListener`、`localStorage`），一套四十行的桩就够把 `boot()` 真跑起来。桩**故意做窄**：只实现用到的那几个方法与属性，哪天启动路径用上新 API，这条测试会直接红 —— 那正说明启动依赖面变了，值得回来看一眼。
+
+**两个坑**（都写在测试注释里，免得后人重踩）：
+
+1. `boot()` 里有一句 `Prefs.preload().then(startApp)`（安卓原生存储是异步的，所以首屏落在**微任务**里）—— 断言必须放到**下一个宏任务**，否则看到的是还没画的白屏，会误报成「启动没渲染」；
+2. Node 自带的 `navigator` 是只读的，注入桩得用 `Object.defineProperty`。
+
+**这条测试能说明什么 / 不能说明什么**：它绿 → 「网页层在启动时不抛异常、首屏画得出来」这条**被排除**了；它**不能**证明真机不闪退 —— 原生层（签名 / 安装 / WebView 版本 / 插件）的问题它照样绿。所以真机闪退仍要 `adb logcat`（见 5.3）。
+
+## 网页版与 APK 差异点（v2.12）
+
+十一条里十条是同一份 JS / CSS；只有「小文件的导入 / 导出」落在既有的那两条平台分界上（导出走 `<a download>` vs 原生插件 `ExportFile`，D-49）：
+
+| 点 | 网页版 | APK |
+|---|---|---|
+| 小文件：导入 `.txt` | `<input type="file" accept=".txt,text/plain">` + `FileReader.readAsText(file,'utf-8')`（和 JSON 导入同一个套路） | 同左 —— WebView 里就是同一个 file input，系统文件选择器弹出、回调一致 |
+| 小文件：导出 `.txt` | `<a download>`，文件名 = `safeFileName(条目名) + '.txt'` | 原生插件 `ExportFile` 写进系统「下载」文件夹 |
+| 其余九条 | 同一份代码 | 同左（版式、判定、数据全一致） |
+| 数据 | `principles` / `skills` / `files` + 模板 `highlight`，`schemaVersion` 仍 1 | 同左；v2.1–v2.11 的 JSON 都能导入 |
+
 ## 五、决策与风险（v2.1 追加）
 
 ### 5.1 已定下来的决定
@@ -1286,6 +1762,19 @@ v2.10 需求 4 给四类行容器加了 `flex-wrap: wrap`、给五个文字格�
 | D-76 | 手机端「右侧按键整组折行 + 靠右对齐」靠**渲染层多包一层 `<span class="task__actions">`**（七处拼行）实现：组内 `display: flex` + `flex-wrap: wrap`，折行对齐用 **`margin-left: auto`** 而不是 `justify-content: flex-end`；桌面端这层盒子 `display: contents`（不生成） | 「整组折行」**单个控件做不到** —— flex 折行按子项算，散着的按钮必然按各自宽度逐个上下行，要拆成两半（这正是 v2.10 没做成的部分）。包成**一个**子项后，它的假设尺寸 = 组内控件总宽，装不下就整组一起走。**用 auto 边距不用 `justify-content`**：auto 边距吃掉的只是它所在那一行的剩余空间，第一行顶最右、第二行也顶最右（左侧自然留空 —— 需求 2 第二句），而 `justify-content: flex-end` 对**每一行**生效，第一行只要剩一两个像素余量就会把勾选框推离左边缘。**桌面端必须透明**：真生成盒子会把父级 `gap` 拆成「父级 gap + 组内 gap」两段，而各行容器 gap 还不一样（任务行 8px、其余 6px），宽屏疏密必变 |
 | D-77 | 手机端五个文字格加 **`max-width: calc(100% - 32px)`**，把长文**按回第一行** | flex 折行按**外部假设主尺寸**（`flex-basis` 定出、再被 min/max 夹紧）决定上哪一行。`flex-basis: auto` 的文字格基准尺寸是 **max-content**，长文算出来比一行还宽 → **整段文字**掉到第二行，第一行只剩勾选框 + 一片空白（需求 1 要治的）。夹上限后长文算出来 ≈ 一行宽，放得进第一行。**32px 两头都有约束**：下界看勾选框（默认 13px + 行 gap 6~8px ≈ 19~21px，留余量后勾选框得宽到 24px 才破功），上界看最窄的控件（完成度「0/1」约 20px —— 余量够宽它就会被塞进第一行，把整组折行拆开）。两头由 `test-mobile-layout.js` 的守卫钉住（上限必须写成 `calc(100% - Npx)` 且 `24 < N < 50`） |
 
+| D-78 | 需求 8 / 9 里的「完成时间」= **六值时段**（`CONFIG.SLOTS`）：新条目由 `defaultSlotFor` 一定给上（I/III 按添加时刻的钟点、II/IV 与认不出的象限一律晚上）；排序键是**复合的** —— `(是否全完成, 时段序, 原下标)`，其中带阶段的任务取**最晚**那个阶段的时段，**块整条不参与**（留在原下标上） | 「完成时间」在本应用里没有第二个候选：时段是任务 / 阶段身上唯一与「什么时候做」有关的结构，需求 8 描述的也正是那六个名字。排序第一键必须是「是否全完成」—— 否则需求 9 会直接推翻需求 6 的「完成沉底」（一条早上做完的任务会跑到晚上没做的前面），这两条得同时成立。第三键（原下标）写成**显式比较**而不是依赖 `sort` 稳定：ES2019 才强制稳定，安卓 WebView 版本参差，不写死的话「同一时段里新加的那条仍在最前」会在老实现上随机漂。块用**留洞**而不是「抽出去再塞回来」，是逐字照需求（块不参与排序 = 它的下标不变） |
+| D-79 | 需求 7：池内条目**从「未完成」翻成「已完成」**时，把它（块头全勾时是块内每条任务）的 `plannedDate` 改成**真实今天**；取消勾选不改回来。**连带一条**：`autoImportDuePoolItems` **跳过已完成的池条目**（未完成的照旧按日期导入；手动导入 / 拖回不受影响）。需求 11：池内任务行**只读**地画出 `bonus === true` 的 🎁 标识，池里仍不提供改 Bonus 的开关 | 需求原话是「计划池的完成时间，请在勾选完成之后更新」—— 池里那栏本来就是这条任务的完成时间，做完就该显示「哪天做完的」。取真实今天（不是正在查看的日期），和阅读栏勾完记今天同一条口径。**连带那条是推断出来的**（用户没明说，见 5.3）：不跳过的话，勾完当天它的日期就是今天 → 「到期」判据立刻成立 → 下次启动它被搬进象限，把「池里勾完不移出池」（2.35）当场推翻，用户看到的是「做完的东西第二天又冒出来」。只读标识而不是加开关：池里不画时段 / Bonus 那套是 D-61 定的口径，需求要的是「标识仍在」 |
+| D-80 | 需求 2：小文件进**主数据**（顶层可选 `files`），不单开 storage key；上限（10 个 / 1MB）做成**软提示**；导入**只认 `.txt` 后缀**（不看 MIME）；正文用**模态 textarea 编辑器**（`Render.openEditor`）改，不在行内编辑 | 判据是 D-53 那条：它是**用户数据**（随 JSON 导出 / 导入、进滚动备份、跟着 durable 副本走），不是「本机看着顺手」的界面状态。上限做软提示是需求用词（「提示」）+ D-64 的同一条口径。判后缀不判 MIME：手机上 MIME 常是空串 / `application/octet-stream`，认 MIME 会把合法 txt 挡在外面。多行正文放不进行内编辑（应用里既有的编辑态都是「一行输入框」），所以给它一个模态编辑器 —— 复用 `openText` 那套骨架，不引新依赖 |
+| D-81 | 需求 3：原则池 = `principles: { active, archived }`，条目**只有** `{ id, text, createdAt }`（**一个时间字段都没有**）；归档表在界面上叫**「参考原则」**；「在哪张表」是唯一的归档判据；**不做**数量提示 | 需求原话「类似于阅读池，但是可以简化，去掉时间相关信息的记录」—— 所以照抄阅读栏的结构，砍掉 `start` / `doneAt`。没有第二个字段参与「归档与否」，`normalizeReading` 那种「强制对齐」在这里不需要（R-35 的风险天然不存在）。数量提示是阅读栏**自己**需求里写的（D-64），原则池需求里没提，就不加（照需求做，不多做） |
+| D-82 | 需求 4 / 5：技能 = `{ id, text, date, createdAt }`，`date` 默认**添加当天**、可改可清成 `null`，写路径只认合法日期；两份清单（`buildSkillsList` / `buildReadingList`）放 `exporter.js`，导出 **`.md`**，内容就是朴素列表文本 | 日期控件**照抄计划池的完成时间那一套**（同一个 `<input type="date">`、同一套提交、同一个「清除」）—— 同一个东西不该做成两样（D-69 / D-70 的理由）。清单放 exporter 是分层（DS 1.4）：「把数据排成人能看的文本」和 `buildMarkdown` / `statsLine` 同一层；数据层只管数据。选 `.md` 是因为需求写的是「txt/markdown文件」二选一，而 `- ` 列表当纯文本看也成立（要改 `.txt` 只动文件名一处） |
+| D-83 | 需求 6：模板行**去掉「改名」按钮**，改成**点名字进改名**；**双击**整条模板切 `highlight`（可选布尔挂在模板身上，严格 `=== true`）。手势、落点判定、色值、导出兼容**全部复用任务那一套**（同一份 `state.clickHit`、同一个 `DOUBLE_CLICK_MAX_MS`、同一个 `isControlNode`、同一组 `--hl-*` 变量） | 需求原话「改成单击改名，双击Highlight（Highlight方式和之前的任务Highlight一样）」—— 「和之前的任务一样」这句直接指向复用，所以连「第二下用第一下记下的落点」「控件上不记落点」这些取舍一起照搬；另写一套只会多一处会漂的实现。模板没有完成态，所以 CSS 里**没有** `:not(--done)` 那一半（这是它和任务高亮的唯一区别） |
+| D-84 | 需求 1：「routine」解读为**导出的日报**（Markdown / PDF 打印页），口径收窄成**只含四象限**；FS 六那句「日报要包含池 / 周 / 月计划」改口；新增 `test-report-scope.js` 做行为 + 源码双向守卫 | 本应用里唯一成文的日报产出就是导出（2.15 写明了没有独立日报页），需求那句「routine 部分」只能指它。**这条解读未经用户正面确认**（见 5.3）。加守卫的理由：这是一条**口径** —— 代码本来就只画象限，真正会漂的是文档与后来者照着旧文档写代码 |
+| D-85 | 需求 10：`getFoldState().collapsedPanels` 用 **`null`** 表示「从没记录过」（没有 key / 老 JSON 里没这一项 / 值坏了）；`app.js` 用 `|| defaultCollapsedPanels()` 把它翻成**六个板块全收起**；「记录过但空表」仍然是 `{}`（= 全展开）。`CONFIG.PANEL_IDS` 扩到六个 | 需求要「默认收起」，而旧实现里「从没记录过」和「用户把六个都点开了」都是空表 —— 一个值表达不了两件事。分成 `null` / `{}` 是最小改动：只多一个取值，存储语义、`togglePanel`、`setCollapsedPanels` 全不动。**不反过来改存「展开了谁」**：那会让老用户本机那份 `collapsedPanels` 当场变成读不懂的旧数据。新板块一并默认收起，因为需求原话是「各个板块（包括……）」 |
+| D-86 | 需求 2 的正文编辑用**模态 textarea**（`Render.openEditor`，textarea 的 class 是 `files__text-input`），是本版唯一新增的交互形态 | 小文件的正文可能几百行，应用里既有的编辑态全是「一行输入框 + 回车 / 失焦提交」，硬塞进行内会既看不全也点不准。模态骨架（`ensureConfirmHost` / `openText`）早就有了，扩展一个可编辑版本比另造一套划得来。**弹层里的 textarea 故意不进 `commitEdit` / `focusEditor` 的选择器清单**：那两个函数是「行内编辑态」的提交端（回车 / 失焦提交），弹层有自己的「保存」按钮 —— 混进同一份清单等于给一个控件造出两个提交时机（D-69 那条「不给同一个控件加第二个提交时机」的理由照搬）。行内的 `files__name-input` 照常进清单 |
+
+| D-87 | v2.13：象限与时段块的折叠**另开一张表** `foldState.collapsedBoards`（键 `q:<象限>` / `tv:<时段>`），**默认展开**；六个大板块继续用 `collapsedPanels`，**默认收起**。折叠状态**拼进渲染的 HTML**（`is-collapsed` 类名），不像面板那样在 DOM 上 toggle；`toggleBoard` 按格式白名单校验 `data-board` | **两张表是因为两套默认值相反**：`collapsedPanels` 的 `null` = 「从没记录过 → 全收起」，而板要「空表 = 全展开」；合成一张表就没法表达两种默认，判据也读不懂。**状态拼进 HTML** 是因为象限 / 时段块每次重画都重新拼字符串，靠 DOM toggle 一重画就丢（面板那边能那么写，是因为 `render()` 结尾会补一次 `setCollapsedPanels`）。白名单是必须的：`data-board` 来自 DOM，脏键会往本机塞垃圾（同 R-36） |
+| D-88 | 网页版 2 栏版面在折叠一格时**不做跨列重排**：那一格只让自己变矮（`align-items: start` 让卡片按内容高），旁边那格与网格空位都不动 | 需求原话「折叠之后那块版面你看怎么搞比较方便就行」。做「旁边那格撑满整行」要引入「按折叠个数动态跨列」的规则，折一格另外三格跟着跳位置 —— 用户折一下整个版面重排，比留个空位更难预期。手机端本来是单列，不受影响；想要撑满观感的话是一条独立小需求（只动 CSS + 一个状态判断） |
+
 ### 5.2 需要注意的风险
 
 | 编号 | 风险 | 会有什么后果 | 怎么防 |
@@ -1321,6 +1810,18 @@ v2.10 需求 4 给四类行容器加了 `flex-wrap: wrap`、给五个文字格�
 
 | R-47 | **新增的 `.task__actions` 包裹盒在两个方向上都会静默出错**：① 某人删掉桌面端那条 `display: contents`（或把它挪进媒体查询），宽屏就真多出一层盒子，`gap` 被拆成两段 → **宽屏疏密变了**，看着像「顺手重构了一下」；② 拼行的地方漏包一处（比如后面新加一类行），那一处的按钮又散着折、被拆成两半，而**看起来只是「这一行的按钮排得有点怪」**。另外**七处拼行全是手写字符串拼接**，漏一个 `</span>` 会让后面整块 HTML 结构错位 | ①的症状最隐蔽：功能全在、只是间距肉眼可见地不再一致，很容易被当成「样式微调」放过。②是「新行没跟上」的老套路（同 R-38 / R-40：**清单靠人眼守必然漏**）。漏 `</span>` 更糟 —— 浏览器容错会把后面的兄弟节点吞进去，整行甚至整块的点击区域都可能错位，而**报错信息是零** | `test-mobile-layout.js` 三条：① **真实渲染**七类行（象限任务行 / 带阶段的任务行 / 阶段行 / 象限块头 / 计划池条目 / 池内块头 / 时间视图条目）各一条 HTML，断言都含 `<span class="task__actions">`、**`<span>` 开闭配平**、且删除键在组**内**（`del > open`）；② 桌面端段 `.task__actions` 必须是 `display: contents`、且**不许**是 `display: flex`（反向守卫，同 R-46 的路子）；③ 手机端 `.task__actions` 必须有 `display: flex` + `flex-wrap: wrap` + `margin-left: auto`，组内 gap 按行容器分（`.task__row > .task__actions` 8px / 其余 6px）。**配平那条是刻意的**：它不看源码文本，直接看拼出来的字符串，所以后面新加一类行忘了 `</span>` 会当场红 |
 
+| R-48 | **小文件把主数据撑大**：1MB 文本进主数据之后，每次保存的滚动备份（4 份）与安卓 durable 副本都要跟着整份复制 → 本机配额（约 5MB）被几倍地吃掉 | 配额满时 **`Store.save` 会失败**，报「本次修改未保存」—— 连带正常的任务保存一起挡下来，而用户会觉得「加了几个小文件，任务就存不上了」 | **总量**（10 个 / 1MB）做成**软提示**并把用量摆在头部（`n/10 个 · x KB / 1 MB`，`over` 时标红）；**单个文件 > 1MB 在导入端直接拒绝**（这是「提示」之外唯一一道硬闸，理由就是这条风险：一个文件就能把配额吃光）；写入失败时照实报既有那条配额提示（不静默丢）。**真要放宽上限，得先改备份策略**（比如小文件不参与滚动备份）——那是另一条需求，不在本版 |
+| R-49 | **排序与「完成沉底」打架**：一条早上做完的任务被按时段排到还没做的晚上任务前面 | 需求 6 的「未完成在前、已完成在后」（打勾样式、沉底、导出 `completed` 都依赖它）当场失效，看起来像「完成沉底坏了」 | 排序键的**第一键就是「是否全完成」**（D-78）：先把「未完成 / 已完成」分两层，再在层内按时段排。`test-auto-slot.js` 两个方向都测（完成任务在前 vs 未完成任务在后） |
+| R-50 | `addStage` 会触发排序，**父任务自己会挪位** | 用户「刚给这条加了个晚上的阶段，这条任务自己往下跑了」——像是被谁动了一下 | 这是需求 9 第二句**要的**效果（父任务的整体完成时间就是最晚那个阶段）。文档在 FS 三十四写明；`test-auto-slot.js` 用「加一个更晚的阶段 → 父任务挪到同时段之后」把行为钉住 |
+| R-51 | 需求 7 连带的「**已完成的池条目不参与自动导入**」（D-79）是本次推断，用户没明说 | 两种误读：①用户其实想让已完成的条目也按日期进象限（那它会「做完第二天又出现」）；②用户以为「日期到了怎么没进来」 | 只跳过**已完成**的；**手动导入 / 拖回象限完全不受影响**（明确意图照做）。FS 三十三 + 验收 + 5.3 都写明这条口径；`test-pool-v12.js` 专门测「已完成的不自动导入、未完成的照常」「手动导入仍能搬」 |
+| R-52 | 新加的三个可滚面板（小文件 / 原则池两段 / 技能池）**忘登记 `Render.SCROLL_SLOTS`** | 那一处勾选类操作会把滚动位置弹回顶部（其余面板正常，看着像「只有这一处坏了」） | `test-scroll-keep.js` 的**自动**交叉核对：样式表里每个带 `overflow-y: auto` 的容器都必须在登记表里 —— 忘登记直接红（同 R-43 的路子） |
+| R-53 | 新板块**忘进 `CONFIG.PANEL_IDS` / 忘写 `[hidden]` 守卫 / 忘了收起三角** | ①收起状态记不住（刷新后弹回默认）；②切视图后板块赖着不走（`display:grid` 之类盖过 `[hidden]`）；③点不到收起 | `test-layout.js`（id 唯一 / `[hidden]` 守卫 / 六个板块头上都有三角）+ `test-fold-state.js`（`PANEL_IDS` 遍历）+ `test-reading.js` 的 `PANEL_IDS` 断言（改成六个）三条一起锁 |
+| R-54 | 新加的**行内**输入框（技能日期框 `skills__date-input`、小文件名字框 `files__name-input`）**忘进 `commitEdit` / `focusEditor` 的选择器清单** | 提交时读到空值 → 「刚选好的日期被清成 null」/「改完名字又变回去」（和 R-40 完全同形：分发骨架漏登记，功能静默失效） | 清单只有**一处**（两个函数共用同一串选择器：`.stage__input, .task__input, .pool__date-input, .reading__start-input, .skills__date-input, .files__name-input`），并且 `test-reading.js` 那条**自动**守卫会扫 `render.js` 里所有行内输入框的 class，逐个要求出现在清单里 —— 新加一种框忘了登记直接红。**弹层编辑器的 textarea（`files__text-input`）是唯一的例外**：它不是行内编辑态、自带「保存」按钮，所以**刻意不在**这份清单里（D-86），守卫按「行内输入框」这一档扫，不会把它算进来 |
+
+| R-55 | v2.13：**象限 / 时段块的折叠状态与六个大板块的收起状态被混成一张表**（或共用一套默认值） | 两种「默认」打架：象限要么一进 App 就是四个折叠小标题（看不见今天的任务），要么六个大板块又变回默认展开（v2.12 需求 10 白做） | 两张独立的表（`collapsedBoards` / `collapsedPanels`）、两套默认值（开 / 收），`test-board-fold.js` 一条「互不串表」把边界钉死；`persistFoldState` 与开机读回都按两张表分别处理 |
+| R-56 | v2.13：**折叠状态只在 DOM 上 toggle、没拼进渲染字符串** | 象限 / 时段块每次重画都是新字符串（`innerHTML` 整块替换），类名当场丢 —— 表现是「折起来之后随便点一下（比如勾一条任务）它就自己弹开了」。面板那边看不出问题（`render()` 结尾会补 `setCollapsedPanels`），所以这种漏法**只在这一处发作**，很容易被当成「偶尔的 bug」 | 折叠类名由 `buildQuadrantHtml` / `buildTimeViewHtml` **拼进 HTML**；`test-board-fold.js` 用真实渲染出来的 HTML 断言「折了 I 只有 I 带 `is-collapsed`」，并在 `renderCurrent` 的源码守卫里要求 `collapsedBoards` 同时传给象限与时间视图两边 |
+| R-57 | v2.13：**守卫自己去撞后代选择器**（`test-style-guards.js` 的 `ruleBody` 用 `indexOf(selector + ' {')`） | 新加一条「后代选择器」形式的 CSS（如 `.timeview__group.is-collapsed .timeview__list`）就会让旧的守卫读到**错的那条规则体**，报出「缺 max-height」这种**假失败** —— 排查时容易去改本来没坏的 CSS | `ruleBody` 改成**按完整选择器 + 行首锚定**的正则（同 R-41 记过的教训：取规则体别图省事用 `indexOf`）。这次的假失败就是这么冒出来的，顺手修掉 |
+
 ### 5.3 还没定下来的问题
 
 - **触摸拖拽手感（R7）**：需求 7（移动端拖动把手）已按 D-48 实现——`drag.js` 的 `pointerType === 'touch' || 'pen'` 只在勾选框上发起拖拽 + CSS `touch-action` 收窄到勾选框。真机上的手感（按住勾选框拖 vs 轻点勾选、任务行正常滚动）仍待真机手工验收，node 测试只锁 CSS 声明（`test-drag-handle.js`）。
@@ -1350,6 +1851,24 @@ v2.10 需求 4 给四类行容器加了 `flex-wrap: wrap`、给五个文字格�
 - ~~**v2.10 的一处口径改动需要用户确认**：需求 4 只说「一行放不下时按钮移到下一行」，没说折下来的按钮怎么排。本版按**各自原宽、左对齐、不拉伸**实现（D-75）—— 若用户想要的是「按钮铺满第二行、均分宽度」（v2.1 的 FS 曾这么写过），改 `.task__row` 折行后那一行的 `justify-content` 或给按钮加 `flex: 1` 即可，改动只有一两行 CSS。~~ **用户已答复（v2.11 需求 2）**：既不是均分宽度、也不是靠左 —— 是**整组折到下一行、靠右对齐、左侧留空**，顺带把 v2.10 没做成的「整组一起折」补上（D-76 / 2.46）。这条已关闭。
 - **真机上的排版手感仍未验**：v2.11 两条都是纯排版，node 里没有排版引擎（无 puppeteer / playwright / jsdom），只能锁住「让行为成立的那些声明」。`max-width: calc(100% - 32px)` 里 32px 的两头余量、以及手机窄屏上「装得下 / 装不下」的临界点，**要在真机（或 DevTools 手机模拟）实际看一眼**。数字真不合适时改动很小：只动那一个 `32px`（守卫允许 24~50 之间任意值）。
 - **`renderCurrent` 的 `keepScroll` 默认值还没定**：现在是「只有勾选类动作显式传 `true`，其余走老路（从顶部看）」。若以后想把「切日期 / 切视图」也做成保留位置（比如用户抱怨翻日期时列表回顶），那要单独设计 —— 那几类动作的列表**内容真的换了**，粘住旧位置可能指向完全不同的条目，不是加个 `true` 就行。
+
+- **v2.12 的几处默认口径（都没经用户正面确认）**：11 条需求都能逐条落地，但下面这几处是本次**推出来的默认**，每条都收在一处、改起来都不大：
+  1. **「routine」= 导出的日报（Markdown / PDF）**（D-84 / 2.53）。需求原文只有一句，而「routine」在本项目里**只有这一处出处**（代码与文档里都没有第二个叫 routine 的东西）。若用户指的是别的产出 / 界面，退法是「日报这边的守卫撤掉 + 新目标按需求另做」。
+  2. **需求 7 的「更新」= 改成今天**（D-79 / 2.49）。若用户的意思是「计划日期别动、另记一个完成日期」，改 `stampPoolCompleted` 一处 + FS / DS 口径。
+  3. **已完成的池条目不参与自动导入**（D-79 / R-51）—— 这条**完全是本次推论**，用户没提。它防的是「勾完当天日期变今天 → 第二天被自动搬进象限」。
+  4. **需求 5 的「txt/markdown」选了 `.md`**（D-82）：内容就是纯文本列表；要改成 `.txt` 只动文件名后缀一处。
+  5. **需求 9 的「任务块不需要根据完成时间来排序」理解为「块和块内任务都不参与」**（D-78）：若用户想让**块内任务**也按时间排，改 `sortTasksByTime` 一处（把 `blockTasks(block)` 也交给它）。
+  6. **需求 10 的「各个板块」包含新增的三个**（D-85）：若只想让原有的三个（阅读栏 / 计划池 / 模板池）默认收起，从 `defaultCollapsedPanels()` 里去掉三个名字即可。
+  7. **小文件的 1MB / 10 个是软提示**（D-80）：要硬拦截就只在 `addFile` 里加一道判断 —— 代价是「满了之后怎么换文件」这类需求没提的问题要一起定。
+  8. **原则池不做数量提示、归档搬到「参考原则」开头**（D-81）：需求只说了「归档」，落点与是否提示都是本次定的默认。
+  9. **小文件的正文用模态编辑器**（D-86）：若更想要「和别的板块一样的行内编辑」，改 `buildFilesHtml` 一处、去掉 `openEditor` 的调用。
+- **小文件的真机手感（没验）**：手机上导入 `.txt`（系统文件选择器）与导出 `.txt`（原生插件写「下载」文件夹）都要装到真机看一眼 —— node 侧只有纯函数，`FileReader` 与文件选择器都跑不了。列进既有的真机验收清单。
+- **`www/` 与 APK**：v2.12 改完已跑 `npm run sync:web` 把页面复制进 `www/`（与根目录逐文件一致），并跑 `npm run android:build` 出了一版 APK —— 产物 `android/app/build/outputs/apk/debug/app-debug.apk`（3.94 MB，`versionCode 7` / `versionName "2.0"`），已核对包内 `assets/public` 与 `www/` 逐文件一致（render.js 里三个新板块的构造器、index.html 里 `#principles` / `#skills` / `#files`、style.css 里新板块那几组规则都在）。**真机安装与手感仍未验**（见上一条）。
+
+- **v2.13 的一处「看着办」**：需求把网页版的 2 栏版面交给实现决定，本版取「折叠一格只让它自己变矮、旁边那格与网格空位都不动」（D-88）。若你更想要「折叠后旁边那格撑满整行」，那是一条独立小需求（只动 CSS + 一个状态判断），随时可以改。
+- **v2.13 的移动端手感未验**：折叠三角在触摸端的点击区是 24px（`.board__toggle` 的 `min-width/min-height`），比 DS 3.3 那条「手机端可点元素 ≥ 48px」小 —— 因为它长在标题栏里、和 `.panel__toggle` 同款（六个大板块的收起三角一直是这个尺寸，用户没提过问题）。真机上觉得难点的话，把这两个尺寸一起调大即可（一处 CSS）。
+- **`www/` 与 APK（v2.13）**：已跑 `npm run sync:web`；并已重打包 —— 产物 `android/app/build/outputs/apk/debug/app-debug.apk`（`versionCode 8` / `versionName "2.0"`，与 v2.12 那版**同版本名、只升 versionCode**，以便覆盖安装），包内已核对带上 `boardToggleHtml`（折叠三角）。**真机手感仍未验**。
+- **「装完打不开 / 还是旧版本」的排查记录（2026-10-11，已结案）**：用户真机上是**手机存储空间不足** —— 安装静默失败、旧版留在原地，于是看起来像「装完闪退 + 版本没变」。**不是本项目的缺陷**，但它验证了两件事：① `test-boot-smoke.js`（2.60）确实能把「网页层启动就崩」这条成因排除掉；② 以后再收到「装完打不开」，先问**手机剩余空间**与「设置 → 应用」里的**版本号**，再去怀疑代码。
 
 ### 5.4 本文和 FS 的对应关系
 
@@ -1390,3 +1909,15 @@ v2.10 需求 4 给四类行容器加了 `flex-wrap: wrap`、给五个文字格�
 | 手机端排版：按钮折行 + 文字占满整行（v2.10 需求 4） | 2.44 + D-75 + R-46 | 已实现（纯 CSS，`max-width: 600px`；按钮排布口径**已由 v2.11 定下**，见下两行） |
 | 手机端折行时文字按回第一行（v2.11 需求 1） | 2.46 + D-77 | 已实现（纯 CSS：五个文字格夹 `max-width: calc(100% - 32px)`） |
 | 手机端右侧按键整组折行 + 靠右对齐（v2.11 需求 2） | 2.46 + D-76 + R-47 | 已实现（渲染层七处包 `.task__actions`；桌面端 `display: contents`） |
+| 日报（routine）只含象限内容（v2.12 需求 1） | 2.53 + D-84 | 已实现（口径落在 FS + `test-report-scope.js` 双向守卫） |
+| 小文件（v2.12 需求 2） | 2.50 + D-80 / D-86 + R-48 | 已实现（`files` 可选字段；软提示；只认 `.txt`；模态正文编辑器） |
+| 原则池与「参考原则」（v2.12 需求 3） | 2.51 + D-81 | 已实现（`principles` 可选字段；条目无任何时间字段） |
+| 技能池（v2.12 需求 4） | 2.52 + D-82 | 已实现（`skills` 可选字段；日期默认添加当天、可改可清） |
+| 技能池 / 已读书籍清单导出（v2.12 需求 5） | 2.52 + D-82 | 已实现（`buildSkillsList` / `buildReadingList` → `.md`） |
+| 模板池单击改名 + 双击高亮（v2.12 需求 6） | 2.55 + D-83 | 已实现（复用任务那套双击与 `highlight` 字段） |
+| 计划池完成时间在勾完更新（v2.12 需求 7） | 2.49 + D-79 + R-51 | 已实现（连带：已完成的池条目不自动导入） |
+| 新条目自动分配时段（v2.12 需求 8） | 2.48 + D-78 | 已实现（I/III 按钟点、II/IV 晚上） |
+| 加完任务 / 阶段按完成时间排序（v2.12 需求 9） | 2.48 + D-78 + R-49 / R-50 | 已实现（复合排序键；块留洞不参与） |
+| 各板块默认收起（v2.12 需求 10） | 2.54 + D-85 + R-53 | 已实现（`collapsedPanels` 用 `null` 表达「从没记录过」） |
+| 计划池保留 Bonus 标识（v2.12 需求 11） | 2.49 + D-79 | 已实现（只读 🎁 标识） |
+| 每块板都能折叠 / 展开且记住状态（v2.13 需求 1） | 2.58 + D-87 / D-88 + R-55 / R-56 / R-57 | 已实现（象限与时段块默认展开；两张表互不干扰；网页版 2 栏留空位，见 D-88） |

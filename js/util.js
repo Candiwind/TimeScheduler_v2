@@ -132,6 +132,37 @@ var Util = (function () {
   }
 
   // ---------------------------------------------------------------------------
+  // 默认完成时段（v2.12 需求 8）
+  //
+  // 「新添加的任务或阶段自动分配时间」：第一、三象限按**当前时刻**落在哪一段，
+  // 第二、四象限一律「晚上」（那些是「不急」的事，默认放到晚上）。
+  //
+  // 这里只返回**序号**（0=早上 … 5=晚上），不返回中文串：时段名是 CONFIG.SLOTS
+  // 里的用户数据（写进 JSON 就不能改了），util.js 是最底层、不依赖 CONFIG，
+  // 把六个中文串抄一份到这里只会多一处要同步的地方。
+  // ---------------------------------------------------------------------------
+
+  /**
+   * 当前时刻落在第几个时段（0=早上 1=上午 2=中午 3=下午 4=傍晚 5=晚上）。
+   *
+   * 边界按需求原话切：8:00 前早上、8:00~12:00 上午、12:00~14:00 中午、
+   * 14:00~17:00 下午、17:00~19:00 傍晚、19:00 之后晚上 —— 每个区间的
+   * **左端点**归它自己（12:00 算中午，不算上午）。
+   *
+   * @param {Date} [date] 不传就是此刻；测试靠它把时间钉死
+   */
+  function slotIndexByClock(date) {
+    var d = (date instanceof Date && !isNaN(date.getTime())) ? date : new Date();
+    var h = d.getHours();
+    if (h < 8) return 0;
+    if (h < 12) return 1;
+    if (h < 14) return 2;
+    if (h < 17) return 3;
+    if (h < 19) return 4;
+    return 5;
+  }
+
+  // ---------------------------------------------------------------------------
   // 唯一编号
   // ---------------------------------------------------------------------------
 
@@ -189,6 +220,59 @@ var Util = (function () {
       '-' + pad2(d.getHours()) + pad2(d.getMinutes());
   }
 
+  // ---------------------------------------------------------------------------
+  // 小文件（v2.12 需求 2）
+  // ---------------------------------------------------------------------------
+
+  /**
+   * 一段文本的 UTF-8 字节数。
+   *
+   * 用来算小文件占了多少空间 —— 用 `str.length`（UTF-16 码元数）算的话，
+   * 中文一个一个算 1、emoji 算 2，和真正写进 localStorage 的体积差一倍以上，
+   * 「不超过 1M」这个提示就成了拍脑袋的假数字。编码规则和 exporter.utf8Bytes
+   * 同一套（这里只数长度，不生成字节）。
+   */
+  function utf8ByteLength(str) {
+    var s = typeof str === 'string' ? str : '';
+    var n = 0;
+    for (var i = 0; i < s.length; i++) {
+      var code = s.charCodeAt(i);
+
+      // 代理对（emoji 之类）：两个 16 位拼成一个码点（4 字节）
+      if (code >= 0xD800 && code <= 0xDBFF && i + 1 < s.length) {
+        var next = s.charCodeAt(i + 1);
+        if (next >= 0xDC00 && next <= 0xDFFF) {
+          code = 0x10000 + ((code - 0xD800) << 10) + (next - 0xDC00);
+          i++;
+        }
+      }
+
+      if (code < 0x80) n += 1;
+      else if (code < 0x800) n += 2;
+      else if (code < 0x10000) n += 3;
+      else n += 4;
+    }
+    return n;
+  }
+
+  /**
+   * 把用户起的名字收拾成能当文件名用的样子：去掉路径分隔符和各系统不认的字符，
+   * 控制字符也去掉，首尾空白/点清掉（Windows 上以点结尾的名字存不下来）。
+   * 全被清光了就给个兜底名 —— 下载一个没名字的文件比下载失败更让人困惑。
+   */
+  function safeFileName(name, fallback) {
+    var s = (typeof name === 'string' ? name : '')
+      .replace(/[\\/:*?"<>|\u0000-\u001F]/g, '')
+      .replace(/^[\s.]+|[\s.]+$/g, '');
+    if (s.length > 80) s = s.slice(0, 80);
+    return s || (fallback || 'untitled');
+  }
+
+  /** 是不是 .txt（需求 2「只支持 txt 格式」；大小写不敏感，前后空白不算） */
+  function isTxtFileName(name) {
+    return /\.txt$/i.test(cleanText(name));
+  }
+
   return {
     pad2: pad2,
     formatDate: formatDate,
@@ -200,11 +284,15 @@ var Util = (function () {
     compareDateStr: compareDateStr,
     isValidReadingStamp: isValidReadingStamp,
     isValidTimeStr: isValidTimeStr,
+    slotIndexByClock: slotIndexByClock,
     genId: genId,
     cleanText: cleanText,
     isValidTaskText: isValidTaskText,
     escapeHtml: escapeHtml,
-    fileStamp: fileStamp
+    fileStamp: fileStamp,
+    utf8ByteLength: utf8ByteLength,
+    safeFileName: safeFileName,
+    isTxtFileName: isTxtFileName
   };
 })();
 

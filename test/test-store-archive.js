@@ -204,5 +204,52 @@ t('keep 加 archive 正好等于原来的全部日期，一条不丢', function 
 });
 
 // ---------------------------------------------------------------------------
+h.group('归档只收缩 dates：所有全局板块整份带走');
+
+t('阅读栏 / 原则池 / 技能池 / 小文件 / 池 / 模板：归档一次一个都不许丢', function () {
+  // 这一条原本就漏过：applyArchive 建的是 createEmpty()，只把 pool / templates
+  // 搬了过去，阅读栏被无声地换成了空表（v2.12 顺手修掉，见 DS 2.48）。
+  // v2.12 新加的三个板块一起按这条规矩办 —— 不然后面每加一个板块就得回来补一笔。
+  var data = buildRange('2020-01-01', 40);
+  data.pool.push({ id: 'p1', text: '池里的', completed: false, createdAt: 1 });
+  data.templates.push({ id: 't1', name: '模板', createdAt: 1,
+                        items: { I: [], II: [], III: [], IV: [] } });
+  data.reading.active.push({ id: 'r1', text: '在读的', start: null, doneAt: null, createdAt: 1 });
+  data.reading.done.push({ id: 'r2', text: '读完的', start: null, doneAt: '2026-10-01', createdAt: 1 });
+  data.principles.active.push({ id: 'pr1', text: '先做重要的', createdAt: 1 });
+  data.principles.archived.push({ id: 'pr2', text: '旧的', createdAt: 1 });
+  data.skills.push({ id: 's1', text: '游泳', date: '2026-01-01', createdAt: 1 });
+  data.files.push({ id: 'f1', name: 'a.txt', text: '正文', createdAt: 1 });
+
+  var plan = Store.planArchive(data, new Date(2026, 9, 1));
+  h.assertTrue(plan.archivedCount > 0, '确实有该归档的日期');
+
+  var next = Store.applyArchive(data, plan);
+  h.assertEqual(next.dates && Object.keys(next.dates).length,
+    Object.keys(plan.keep).length, 'dates 换成收缩后的那份');
+  h.assertEqual(next.pool.length, 1);
+  h.assertEqual(next.templates.length, 1);
+  h.assertEqual(next.reading.active.length, 1, '阅读栏以前就是在这儿被丢掉的');
+  h.assertEqual(next.reading.done.length, 1);
+  h.assertEqual(next.principles.active.length, 1);
+  h.assertEqual(next.principles.archived.length, 1);
+  h.assertEqual(next.skills.length, 1);
+  h.assertEqual(next.files.length, 1);
+  h.assertEqual(next.files[0].text, '正文');
+});
+
+t('归档出来的那一份 JSON 仍然只有 user / schemaVersion / dates（存档格式不变）', function () {
+  var data = buildRange('2020-01-01', 40);
+  data.skills.push({ id: 's1', text: '游泳', date: null, createdAt: 1 });
+
+  var plan = Store.planArchive(data, new Date(2026, 9, 1));
+  var payload = Store.buildArchivePayload(data, plan);
+
+  h.assertEqual(Object.keys(payload).sort().join(','), 'dates,schemaVersion,user');
+  h.assertFalse(JSON.stringify(payload).indexOf('游泳') !== -1,
+    '归档文件只装日期数据，全局板块留在本地');
+});
+
+// ---------------------------------------------------------------------------
 
 h.summary('store.js 30 天归档');

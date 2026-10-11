@@ -453,7 +453,9 @@ t('空列表：头部在（含「存今天为模板」），给空态提示', fu
   h.assertTrue(html.indexOf('tpl__list') === -1, '没有列表就不画 ul');
 });
 
-t('每行：名称 + 应用 / 改名 / 删除，头部带计数', function () {
+t('每行：名称（点它改名）+ 应用 / 删除，头部带计数', function () {
+  // v2.12 需求 6：改名改成**单击名字**，那个单独的「改名」按钮去掉了 ——
+  // 所以这里断言「有 tpl__name、**没有** tpl__rename」，别把按钮加回来
   var html = Render.buildTemplatesHtml([
     { id: 't1', name: '2026-10-01', createdAt: 1,
       items: { I: [], II: [], III: [], IV: [] } }
@@ -461,8 +463,9 @@ t('每行：名称 + 应用 / 改名 / 删除，头部带计数', function () {
 
   h.assertTrue(html.indexOf('tpl__count">1<') !== -1, '计数在');
   h.assertTrue(html.indexOf('2026-10-01') !== -1, '名称在');
+  h.assertTrue(html.indexOf('tpl__name') !== -1, '名字本身就是改名入口');
+  h.assertFalse(html.indexOf('tpl__rename') !== -1, '「改名」按钮该去掉（单击名字即可）');
   h.assertTrue(html.indexOf('tpl__apply') !== -1);
-  h.assertTrue(html.indexOf('tpl__rename') !== -1);
   h.assertTrue(html.indexOf('tpl__del') !== -1);
   h.assertTrue(html.indexOf('data-id="t1"') !== -1, '行上挂着模板 id');
 });
@@ -489,5 +492,147 @@ t('名称要转义', function () {
 });
 
 // ---------------------------------------------------------------------------
+h.group('v2.12 需求 6：单击改名 + 双击高亮');
 
-h.summary('模板（DS 2.14）');
+var fs = require('fs');
+var path = require('path');
+var appSrc = fs.readFileSync(path.join(__dirname, '..', 'js', 'app.js'), 'utf8');
+var renderSrc = fs.readFileSync(path.join(__dirname, '..', 'js', 'render.js'), 'utf8');
+var cssSrc = fs.readFileSync(path.join(__dirname, '..', 'css', 'style.css'), 'utf8');
+
+/** 截出某个函数的函数体 */
+function bodyOf(src, name) {
+  var start = src.indexOf('function ' + name + '(');
+  if (start === -1) return '';
+  var end = src.indexOf('\n  }', start);
+  return src.slice(start, end === -1 ? src.length : end);
+}
+
+function tplData(highlight) {
+  var tpl = { id: 't1', name: '例程', createdAt: 1, items: { I: [], II: [], III: [], IV: [] } };
+  if (highlight) tpl.highlight = true;
+  return [tpl];
+}
+
+t('数据层：setTemplateHighlight 置 / 删 / NOT_FOUND', function () {
+  var data = Store.createEmpty();
+  seedDay(data, DATE);   // 空的一天存不出模板（EMPTY_DAY）
+  TaskOps.saveDayAsTemplate(data, DATE);
+  var id = data.templates[0].id;
+
+  h.assertTrue(TaskOps.setTemplateHighlight(data, id, true).ok);
+  h.assertEqual(data.templates[0].highlight, true);
+
+  h.assertTrue(TaskOps.setTemplateHighlight(data, id, false).ok);
+  h.assertEqual(data.templates[0].highlight, undefined, '取消 = 删字段，不留 false');
+
+  h.assertEqual(TaskOps.setTemplateHighlight(data, 'no-such', true).error,
+    TaskOps.ERR.NOT_FOUND);
+});
+
+t('渲染：highlight 的模板带 tpl__item--highlight，底色画在名字上', function () {
+  var on = Render.buildTemplatesHtml(tplData(true), null);
+  h.assertTrue(on.indexOf('tpl__item--highlight') !== -1);
+
+  var off = Render.buildTemplatesHtml(tplData(false), null);
+  h.assertFalse(off.indexOf('tpl__item--highlight') !== -1);
+});
+
+t('高亮**不传染**：模板里条目的 highlight 是另一回事', function () {
+  var data = Store.createEmpty();
+  TaskOps.addTask(data, DATE, 'I', '晨练');
+  TaskOps.saveDayAsTemplate(data, DATE);
+  data.templates[0].highlight = true;
+
+  var html = Render.buildTemplatesHtml(data.templates, null);
+  h.assertTrue(html.indexOf('tpl__item--highlight') !== -1, '模板自己标黄了');
+  h.assertFalse(html.indexOf('task--highlight') !== -1, '里面的任务没被带上');
+});
+
+t('Store 清洗：只有 === true 才落库（脏值一律按没高亮）', function () {
+  function normalizeTpl(highlight) {
+    var raw = { dates: {}, templates: [{ name: '例程', highlight: highlight,
+      items: { I: [], II: [], III: [], IV: [] } }] };
+    return Store.normalize(raw).data.templates[0];
+  }
+
+  h.assertEqual(normalizeTpl(true).highlight, true);
+  ['yes', 1, 'true', 0, null, {}, []].forEach(function (bad) {
+    h.assertEqual(normalizeTpl(bad).highlight, undefined,
+      JSON.stringify(bad) + ' 不该算高亮');
+  });
+});
+
+t('导入：highlight 跟着文件走；老文件（没这个字段）照常', function () {
+  var incoming = Importer.validate(JSON.stringify({
+    user: 'default', schemaVersion: 1, dates: {},
+    templates: [{ name: '带高亮的', highlight: true,
+                  items: { I: [], II: [], III: [], IV: [] } },
+                { name: '没高亮的',
+                  items: { I: [], II: [], III: [], IV: [] } }]
+  })).data;
+
+  var local = Store.createEmpty();
+  var r = Importer.merge(local, incoming);
+  h.assertEqual(r.added, 2);
+  h.assertEqual(local.templates[0].highlight, true);
+  h.assertEqual(local.templates[1].highlight, undefined);
+});
+
+t('序列化 → 解析：模板高亮来回不丢', function () {
+  var data = Store.createEmpty();
+  seedDay(data, DATE);   // 空的一天存不出模板（EMPTY_DAY）
+  TaskOps.saveDayAsTemplate(data, DATE);
+  TaskOps.setTemplateHighlight(data, data.templates[0].id, true);
+
+  var back = Store.parse(Store.serialize(data)).data;
+  h.assertEqual(back.templates[0].highlight, true);
+});
+
+t('app.js：bindTemplates 里也有「第二下」那条分流（双击 = 高亮）', function () {
+  var body = bodyOf(appSrc, 'bindTemplates');
+  h.assertTrue(body.indexOf('if (e.detail >= 2) {') !== -1, '双击的第二下要先被拦下');
+  h.assertTrue(body.indexOf('handleSecondClick();') !== -1);
+  h.assertTrue(body.indexOf('state.clickHit = rememberHit(hitOfTemplate(target));') !== -1);
+  h.assertTrue(body.indexOf("closest(target, 'tpl__name')") !== -1, '单击名字 = 改名');
+  h.assertFalse(body.indexOf('tpl__rename') !== -1, '「改名」按钮已经去掉');
+});
+
+t('app.js：落点解析只认模板行；高亮分派接到 setTemplateHighlight', function () {
+  var hit = bodyOf(appSrc, 'hitOfTemplate');
+  h.assertTrue(hit.indexOf('isControlNode(target)') !== -1, '控件上不记落点');
+  h.assertTrue(hit.indexOf('tpl__item') !== -1);
+  h.assertTrue(hit.indexOf("list: 'tpl'") !== -1);
+
+  var toggle = bodyOf(appSrc, 'doToggleHighlight');
+  h.assertTrue(toggle.indexOf('TaskOps.setTemplateHighlight(') !== -1);
+  h.assertTrue(toggle.indexOf("hit.list === 'tpl'") !== -1);
+
+  var find = bodyOf(appSrc, 'findHighlightTarget');
+  h.assertTrue(find.indexOf("hit.list === 'tpl'") !== -1, '第二下要重新查一遍数据');
+  h.assertTrue(find.indexOf('TaskOps.findTemplate(') !== -1);
+});
+
+t('CSS：模板高亮和任务那一组同源（同一组变量、同一个画法）', function () {
+  var rule = /\.tpl__item--highlight[^{]*\{([^}]*)\}/.exec(cssSrc);
+  h.assertTrue(rule !== null, '找不到模板高亮的规则');
+  var body = rule ? rule[1] : '';
+
+  h.assertTrue(body.indexOf('background: var(--hl-bg)') !== -1);
+  h.assertTrue(body.indexOf('color: var(--hl-text)') !== -1);
+  h.assertTrue(body.indexOf('padding: 0 3px') !== -1);
+  h.assertTrue(body.indexOf('margin: 0 -3px') !== -1);
+  h.assertTrue(rule[0].indexOf('.tpl__name') !== -1, '底色画在名字那段文字上');
+});
+
+t('模板没有完成态，所以高亮不写 :not(--done)（它不会自动失效）', function () {
+  h.assertFalse(/\.tpl__item--highlight[^{]*:not\(/.test(cssSrc));
+});
+
+t('保护模式下双击点不动（高亮是写操作）', function () {
+  h.assertTrue(bodyOf(appSrc, 'doToggleHighlight').indexOf('Store.isProtectionMode()') !== -1);
+});
+
+// ---------------------------------------------------------------------------
+
+h.summary('模板（DS 2.14 + v2.12 需求 6）');

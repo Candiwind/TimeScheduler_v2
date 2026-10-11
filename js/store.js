@@ -81,7 +81,14 @@ var Store = (function (CONFIG, Util) {
       templates: [],
       // 阅读栏（v2.8 需求 2，见 DS 2.37）：同 pool / templates 平级的全局结构，
       // 分「正在阅读」和「已读完成」两张表。老数据没有 → normalize 补空
-      reading: { active: [], done: [] }
+      reading: { active: [], done: [] },
+      // 原则池（v2.12 需求 3，见 DS 2.51）：像阅读栏，但**不记任何日期**。
+      // 正在遵循 / 已归档（归档那段的名字是需求点名的「参考原则」）
+      principles: { active: [], archived: [] },
+      // 技能池（v2.12 需求 4，见 DS 2.52）：一条技能 = 文字 + 一个可改的日期
+      skills: [],
+      // 小文件（v2.12 需求 2，见 DS 2.50）：txt 小文本，与日期、任务都无关
+      files: []
     };
   }
 
@@ -356,17 +363,21 @@ var Store = (function (CONFIG, Util) {
       }
     }
 
-    return {
-      template: {
-        id: typeof raw.id === 'string' && raw.id ? raw.id : Util.genId(),
-        name: name,
-        createdAt: typeof raw.createdAt === 'number' && isFinite(raw.createdAt)
-          ? raw.createdAt
-          : clock(),
-        items: items
-      },
-      dropped: dropped
+    var template = {
+      id: typeof raw.id === 'string' && raw.id ? raw.id : Util.genId(),
+      name: name,
+      createdAt: typeof raw.createdAt === 'number' && isFinite(raw.createdAt)
+        ? raw.createdAt
+        : clock(),
+      items: items
     };
+
+    // 高亮（v2.12 需求 6）：模板也能整体标黄（双击切换，和任务同一套），
+    // 落在模板自己的 highlight 字段上；只有 === true 才置（老文件没有这个
+    // 字段 → 就是没高亮，不补默认值）
+    if (raw.highlight === true) template.highlight = true;
+
+    return { template: template, dropped: dropped };
   }
 
   /**
@@ -430,6 +441,123 @@ var Store = (function (CONFIG, Util) {
       }
     }
     return { reading: out, dropped: dropped };
+  }
+
+  /**
+   * 清洗一条「原则」（v2.12 需求 3，见 DS 2.51）。
+   *
+   * 和阅读栏的条目比，**刻意少了所有时间字段** —— 需求原话是「类似于阅读池，
+   * 但是可以简化，去掉时间相关信息的记录」。所以形状就只有 id / text / createdAt，
+   * 归档这件事只体现在「在哪张表」，不留时间戳。
+   */
+  function normalizePrincipleItem(raw) {
+    if (!isPlainObject(raw)) return null;
+
+    var text = Util.cleanText(raw.text);
+    if (!text) return null;   // 没内容的原则没有意义（和任务同一条规矩）
+
+    return {
+      id: typeof raw.id === 'string' && raw.id ? raw.id : Util.genId(),
+      text: text,
+      createdAt: typeof raw.createdAt === 'number' && isFinite(raw.createdAt)
+        ? raw.createdAt
+        : clock()
+    };
+  }
+
+  /** 清洗整张原则池：{ active: [...], archived: [...] }（archived = 参考原则） */
+  function normalizePrinciples(raw) {
+    var out = { active: [], archived: [] };
+    if (!isPlainObject(raw)) return { principles: out, dropped: 0 };
+
+    var dropped = 0;
+    var tables = ['active', 'archived'];
+    for (var t = 0; t < tables.length; t++) {
+      var list = raw[tables[t]];
+      if (!Array.isArray(list)) continue;
+
+      for (var i = 0; i < list.length; i++) {
+        var item = normalizePrincipleItem(list[i]);
+        if (!item) {
+          dropped++;
+          continue;
+        }
+        out[tables[t]].push(item);
+      }
+    }
+    return { principles: out, dropped: dropped };
+  }
+
+  /**
+   * 清洗一条「技能」（v2.12 需求 4，见 DS 2.52）。
+   *
+   * 形状 = { id, text, date, createdAt }，`date` 是**可选**的日期（'YYYY-MM-DD'）：
+   * 加进来时默认取当天，之后用户可以改、也可以清成「未设定」（null）。
+   * 日期不合法就丢字段不丢技能 —— 时间是附加信息，不该拦住技能本身。
+   */
+  function normalizeSkillItem(raw) {
+    if (!isPlainObject(raw)) return null;
+
+    var text = Util.cleanText(raw.text);
+    if (!text) return null;
+
+    return {
+      id: typeof raw.id === 'string' && raw.id ? raw.id : Util.genId(),
+      text: text,
+      date: Util.isValidDateStr(raw.date) ? raw.date : null,
+      createdAt: typeof raw.createdAt === 'number' && isFinite(raw.createdAt)
+        ? raw.createdAt
+        : clock()
+    };
+  }
+
+  function normalizeSkills(raw) {
+    var out = [];
+    var dropped = 0;
+    if (!Array.isArray(raw)) return { skills: out, dropped: dropped };
+
+    for (var i = 0; i < raw.length; i++) {
+      var item = normalizeSkillItem(raw[i]);
+      if (item) out.push(item);
+      else dropped++;
+    }
+    return { skills: out, dropped: dropped };
+  }
+
+  /**
+   * 清洗一个小文件（v2.12 需求 2，见 DS 2.50）。
+   *
+   * 形状 = { id, name, text, createdAt }。`name` 去空白后要有东西（一排没名字的
+   * 文件没法认）；`text` **可以是空串** —— 空文件是合法文件（新建一个先占位、
+   * 之后再往里写），这和「任务文本不能为空」不是一回事。
+   */
+  function normalizeFileItem(raw) {
+    if (!isPlainObject(raw)) return null;
+
+    var name = Util.cleanText(raw.name);
+    if (!name) return null;
+
+    return {
+      id: typeof raw.id === 'string' && raw.id ? raw.id : Util.genId(),
+      name: name,
+      text: typeof raw.text === 'string' ? raw.text : '',
+      createdAt: typeof raw.createdAt === 'number' && isFinite(raw.createdAt)
+        ? raw.createdAt
+        : clock()
+    };
+  }
+
+  function normalizeFiles(raw) {
+    var out = [];
+    var dropped = 0;
+    if (!Array.isArray(raw)) return { files: out, dropped: dropped };
+
+    for (var i = 0; i < raw.length; i++) {
+      var item = normalizeFileItem(raw[i]);
+      if (item) out.push(item);
+      else dropped++;
+    }
+    return { files: out, dropped: dropped };
   }
 
   /**
@@ -559,6 +687,16 @@ var Store = (function (CONFIG, Util) {
     var reading = readingResult.reading;
     dropped += readingResult.dropped;
 
+    // ---- 原则池 / 技能池 / 小文件（v2.12，见 DS 2.51 / 2.52 / 2.50）----
+    // 三条都和 pool / templates / reading 同款：老数据没有这些字段 → 补空，
+    // schemaVersion 不动（纯追加，老备份 / 老导出文件照常读）
+    var principlesResult = normalizePrinciples(raw.principles);
+    dropped += principlesResult.dropped;
+    var skillsResult = normalizeSkills(raw.skills);
+    dropped += skillsResult.dropped;
+    var filesResult = normalizeFiles(raw.files);
+    dropped += filesResult.dropped;
+
     return {
       data: {
         user: typeof raw.user === 'string' && raw.user ? raw.user : CONFIG.USER_ID,
@@ -571,7 +709,11 @@ var Store = (function (CONFIG, Util) {
         templates: templates,
         // 阅读栏（v2.8 需求 2）：和 pool / templates 同款 —— 老数据没有这个
         // 字段 → 补一张空表，schemaVersion 不动（纯追加）
-        reading: reading
+        reading: reading,
+        // 原则池 / 技能池 / 小文件（v2.12 需求 2/3/4）：同上
+        principles: principlesResult.principles,
+        skills: skillsResult.skills,
+        files: filesResult.files
       },
       dropped: dropped
     };
@@ -845,11 +987,27 @@ var Store = (function (CONFIG, Util) {
    * v2.8 起多一张 collapsedPanels（哪些**板块**收起了，见需求 3 / DS 2.38）：
    * 和「任务展开 / 块折叠」是同一种界面状态，所以共用这一份存取，不另开
    * 一个 storage key —— 两处分开存只会多一个会坏、会不同步的地方。
+   *
+   * v2.12 需求 10 起，这块的默认值变成了「**全都收起**」，但要区分两种「空」：
+   *   - 从没记录过（没有这个 key，或者老版本存的 JSON 里没有 collapsedPanels
+   *     这一项）→ 给 **null**，表示「用户一次都没动过」，由 app.js 补上默认的
+   *     「六个板块全收起」；
+   *   - 记录过但是空表（用户把六个板块全点开了）→ 给 **{}**，六个都露着。
+   * 把这两种情况混成一个空表，就成了「刚点开的面板下次刷新又自己关上了」。
+   *
+   * v2.13 起再多一张 collapsedBoards（**四象限的每个象限 + 时间视图的每个时段块**
+   * 收起了谁，见 DS 2.58）。它和 collapsedPanels 的命运不同，所以**默认值也相反**：
+   *   - 板上这些「看内容的窗口」（象限、时段块）**默认展开** —— 一进 App 就该看见
+   *     今天的任务，而不是六个折叠小标题。所以空表 `{}` 就是它的默认，
+   *     不需要 collapsedPanels 那套「null = 从没记录过」的把戏（那套是为了
+   *     「默认收起」才存在的）。
+   *   - 键的格式见 render 的 boardKey：象限是 `q:<象限 id>`、时段块是 `tv:<时段名>`。
+   * 两张表各存各的，互不影响 —— 用户把某个象限折起来，不该动到计划池的收起状态。
    */
   function getFoldState() {
     try {
       var text = storage.getItem(CONFIG.KEYS.foldState);
-      if (!text) return { expanded: {}, collapsedBlocks: {}, collapsedPanels: {} };
+      if (!text) return { expanded: {}, collapsedBlocks: {}, collapsedPanels: null, collapsedBoards: {} };
       var parsed = JSON.parse(text);
       return {
         expanded: (parsed && typeof parsed.expanded === 'object' && parsed.expanded)
@@ -857,10 +1015,12 @@ var Store = (function (CONFIG, Util) {
         collapsedBlocks: (parsed && typeof parsed.collapsedBlocks === 'object' && parsed.collapsedBlocks)
           ? parsed.collapsedBlocks : {},
         collapsedPanels: (parsed && typeof parsed.collapsedPanels === 'object' && parsed.collapsedPanels)
-          ? parsed.collapsedPanels : {}
+          ? parsed.collapsedPanels : null,
+        collapsedBoards: (parsed && typeof parsed.collapsedBoards === 'object' && parsed.collapsedBoards)
+          ? parsed.collapsedBoards : {}
       };
     } catch (e) {
-      return { expanded: {}, collapsedBlocks: {}, collapsedPanels: {} };
+      return { expanded: {}, collapsedBlocks: {}, collapsedPanels: null, collapsedBoards: {} };
     }
   }
 
@@ -870,7 +1030,8 @@ var Store = (function (CONFIG, Util) {
       storage.setItem(CONFIG.KEYS.foldState, JSON.stringify({
         expanded: (fold && fold.expanded) || {},
         collapsedBlocks: (fold && fold.collapsedBlocks) || {},
-        collapsedPanels: (fold && fold.collapsedPanels) || {}
+        collapsedPanels: (fold && fold.collapsedPanels) || {},
+        collapsedBoards: (fold && fold.collapsedBoards) || {}
       }));
     } catch (e) { /* 界面状态存不上不是大事 */ }
   }
@@ -1021,16 +1182,26 @@ var Store = (function (CONFIG, Util) {
   /**
    * 把归档计划套用到数据上，返回**新的**数据对象（不改原来那份）。
    * 只有在归档文件确认下载成功之后，才该调用它（见 DS 2.4 那条硬规矩）。
+   *
+   * 归档**只收缩 dates**（那才是「按天堆起来的」东西）：其余全局板块整份
+   * 搬过去。以前这里漏了阅读栏 —— 归档一次，阅读栏就被换成了空表
+   * （v2.12 顺手修掉，见 DS 2.57）；v2.12 新加的三个板块一起按这条规矩办，
+   * 不然刚存进去的原则 / 技能 / 小文件会在下一次归档时凭空消失。
    */
   function applyArchive(data, plan) {
     var next = createEmpty();
     next.user = data.user;
     next.schemaVersion = data.schemaVersion;
     next.dates = plan.keep;
-    // 归档只收缩 dates；计划池没有日期，跟着留下（见 DS 2.11 统计与归档）
+    // 计划池没有日期，跟着留下（见 DS 2.11 统计与归档）
     next.pool = Array.isArray(data.pool) ? data.pool : [];
     // 模板同样不按日期分，跟着留下（见 DS 2.14）
     next.templates = Array.isArray(data.templates) ? data.templates : [];
+    // 阅读栏 / 原则池 / 技能池 / 小文件：都跟日期无关，整份带走
+    next.reading = normalizeReading(data.reading).reading;
+    next.principles = normalizePrinciples(data.principles).principles;
+    next.skills = normalizeSkills(data.skills).skills;
+    next.files = normalizeFiles(data.files).files;
     return next;
   }
 
@@ -1058,6 +1229,12 @@ var Store = (function (CONFIG, Util) {
     normalizeTemplate: normalizeTemplate,
     normalizeReading: normalizeReading,
     normalizeReadingItem: normalizeReadingItem,
+    normalizePrinciples: normalizePrinciples,
+    normalizePrincipleItem: normalizePrincipleItem,
+    normalizeSkillItem: normalizeSkillItem,
+    normalizeSkills: normalizeSkills,
+    normalizeFileItem: normalizeFileItem,
+    normalizeFiles: normalizeFiles,
     blockDone: blockDone,
     allDone: allDone,
     sanitizeTvOrder: sanitizeTvOrder,

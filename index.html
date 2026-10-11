@@ -71,6 +71,13 @@
           <button type="button" class="menu__item" data-format="md">
             Markdown<small>当前查看那一天的日报</small>
           </button>
+          <!-- v2.12 需求 5：把两份「清单」单独导出来带走（不混进日报） -->
+          <button type="button" class="menu__item" data-format="skills">
+            技能清单<small>技能池导出成 Markdown 清单</small>
+          </button>
+          <button type="button" class="menu__item" data-format="reading">
+            已读书籍<small>已读完的书导出成 Markdown 清单</small>
+          </button>
           <button type="button" class="menu__item" data-format="zip">
             ZIP<small>JSON + Markdown 打包</small>
           </button>
@@ -110,6 +117,23 @@
 
   <!-- 模板：把某一天的四象限存成能反复用的底稿（见 DS 2.14） -->
   <section id="templates" class="templates"></section>
+
+  <!--
+    v2.12 的三个板块（需求 3 / 需求 4 / 需求 2）：原则池 / 技能池 / 小文件。
+    三个都跟日期、跟象限无关，所以和计划池 / 阅读栏一样**两个视图都露着**；
+    六个板块默认一律是收起的（需求 10），用户点开哪个哪个才展开。
+  -->
+  <!-- 原则池：正在遵循的原则 + 归档后的「参考原则」（见 DS 2.48） -->
+  <section id="principles" class="principles"></section>
+
+  <!-- 技能池：自己 get 到的新技能，各带一个可改的日期（见 DS 2.49） -->
+  <section id="skills" class="skills"></section>
+
+  <!-- 小文件：存下来的 txt 小文本，可导入导出（见 DS 2.50） -->
+  <section id="files" class="files"></section>
+
+  <!-- 导入 .txt 用的，藏起来由「小文件」板块头上的「导入」触发（v2.12 需求 2） -->
+  <input type="file" id="file-text-input" accept=".txt,text/plain" hidden>
 
   <!-- 提示统一出口（见 DS 4.3） -->
   <div id="toast-host" class="toast-host" aria-live="polite"></div>

@@ -34,7 +34,10 @@ var Importer = (function (CONFIG, Util, Store) {
     BAD_BLOCK: 'BAD_BLOCK',         // 某个任务块不合法（含块里套块）
     BAD_POOL: 'BAD_POOL',           // 计划池不合法（不是列表 / 里面有块或坏任务）
     BAD_TEMPLATE: 'BAD_TEMPLATE',   // 模板不合法（不是列表 / 没名字 / items 不合法）
-    BAD_READING: 'BAD_READING'      // 阅读栏不合法（不是对象 / active / done 不是列表 / 条目没名字）
+    BAD_READING: 'BAD_READING',     // 阅读栏不合法（不是对象 / active / done 不是列表 / 条目没名字）
+    BAD_PRINCIPLES: 'BAD_PRINCIPLES', // 原则池不合法（v2.12 需求 3）
+    BAD_SKILLS: 'BAD_SKILLS',       // 技能池不合法（v2.12 需求 4）
+    BAD_FILES: 'BAD_FILES'          // 小文件不合法（v2.12 需求 2）
   };
 
   var ERR_TEXT = {};
@@ -51,6 +54,9 @@ var Importer = (function (CONFIG, Util, Store) {
   ERR_TEXT[ERR.BAD_POOL] = '文件里计划池的内容不合法。';
   ERR_TEXT[ERR.BAD_TEMPLATE] = '文件里模板的内容不合法。';
   ERR_TEXT[ERR.BAD_READING] = '文件里阅读栏的内容不合法。';
+  ERR_TEXT[ERR.BAD_PRINCIPLES] = '文件里原则池的内容不合法。';
+  ERR_TEXT[ERR.BAD_SKILLS] = '文件里技能池的内容不合法。';
+  ERR_TEXT[ERR.BAD_FILES] = '文件里小文件的内容不合法。';
 
   function isPlainObject(v) {
     return v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -363,6 +369,9 @@ var Importer = (function (CONFIG, Util, Store) {
           createdAt: typeof rawTpl.createdAt === 'number' && isFinite(rawTpl.createdAt)
             ? rawTpl.createdAt
             : null,
+          // 高亮（v2.12 需求 6）：同 bonus / highlight 一条取舍 —— 只认 === true，
+          // 老文件没有这个字段就是 null（没高亮），不拒整份
+          highlight: rawTpl.highlight === true ? true : null,
           items: tplItems
         });
       }
@@ -409,6 +418,96 @@ var Importer = (function (CONFIG, Util, Store) {
       }
     }
 
+    // ---- 原则池（v2.12 需求 3）：**可选** —— 和 reading 同一条规矩，
+    // 「没有」合法（v2.12 之前导出的文件都没有），「有但不合法」整份拒绝
+    var principles = null;
+    if (raw.principles !== undefined && raw.principles !== null) {
+      if (!isPlainObject(raw.principles)) {
+        return fail(ERR.BAD_PRINCIPLES, 'principles 不是一个对象');
+      }
+      principles = { active: [], archived: [] };
+      var principleTables = ['active', 'archived'];
+      for (var pt = 0; pt < principleTables.length; pt++) {
+        var pTable = principleTables[pt];
+        var pList = raw.principles[pTable];
+        if (pList === undefined || pList === null) continue; // 缺一张表当空表
+        if (!Array.isArray(pList)) {
+          return fail(ERR.BAD_PRINCIPLES, 'principles.' + pTable + ' 不是一个列表');
+        }
+        for (var pi = 0; pi < pList.length; pi++) {
+          var rawPrinciple = pList[pi];
+          if (!isPlainObject(rawPrinciple) || !Util.isValidTaskText(rawPrinciple.text)) {
+            return fail(ERR.BAD_PRINCIPLES, '原则池第 ' + (pi + 1) + ' 条（没有内容）');
+          }
+          // 原则**没有日期字段**（需求 3：去掉时间相关信息），所以这里只抄
+          // 文本和创建时间 —— 文件里就算多带了日期，也不往数据里落
+          principles[pTable].push({
+            text: Util.cleanText(rawPrinciple.text),
+            createdAt: (typeof rawPrinciple.createdAt === 'number' &&
+                        isFinite(rawPrinciple.createdAt))
+              ? rawPrinciple.createdAt
+              : null
+          });
+        }
+      }
+    }
+
+    // ---- 技能池（v2.12 需求 4）：可选；日期同样「没有 / 空串当没设，
+    // 有但不合法就拒绝」—— 和阅读栏的日期同一条严格口径
+    var skills = null;
+    if (raw.skills !== undefined && raw.skills !== null) {
+      if (!Array.isArray(raw.skills)) {
+        return fail(ERR.BAD_SKILLS, 'skills 不是一个列表');
+      }
+      skills = [];
+      for (var si = 0; si < raw.skills.length; si++) {
+        var rawSkill = raw.skills[si];
+        var skillWhere = '技能池第 ' + (si + 1) + ' 条';
+        if (!isPlainObject(rawSkill) || !Util.isValidTaskText(rawSkill.text)) {
+          return fail(ERR.BAD_SKILLS, skillWhere + '（没有内容）');
+        }
+        if (rawSkill.date !== undefined && rawSkill.date !== null && rawSkill.date !== '' &&
+            !Util.isValidDateStr(rawSkill.date)) {
+          return fail(ERR.BAD_SKILLS, skillWhere + '的日期不是 YYYY-MM-DD');
+        }
+        skills.push({
+          text: Util.cleanText(rawSkill.text),
+          date: Util.isValidDateStr(rawSkill.date) ? rawSkill.date : null,
+          createdAt: (typeof rawSkill.createdAt === 'number' && isFinite(rawSkill.createdAt))
+            ? rawSkill.createdAt
+            : null
+        });
+      }
+    }
+
+    // ---- 小文件（v2.12 需求 2）：可选；名字要有，内容必须是字符串
+    // （空串合法 —— 空文件是合法文件），别的形状一律整份拒绝
+    var files = null;
+    if (raw.files !== undefined && raw.files !== null) {
+      if (!Array.isArray(raw.files)) {
+        return fail(ERR.BAD_FILES, 'files 不是一个列表');
+      }
+      files = [];
+      for (var fi = 0; fi < raw.files.length; fi++) {
+        var rawFile = raw.files[fi];
+        var fileWhere = '小文件第 ' + (fi + 1) + ' 个';
+        if (!isPlainObject(rawFile) || !Util.isValidTaskText(rawFile.name)) {
+          return fail(ERR.BAD_FILES, fileWhere + '（没有文件名）');
+        }
+        if (rawFile.text !== undefined && rawFile.text !== null &&
+            typeof rawFile.text !== 'string') {
+          return fail(ERR.BAD_FILES, fileWhere + '的内容不是一个字符串');
+        }
+        files.push({
+          name: Util.cleanText(rawFile.name),
+          text: typeof rawFile.text === 'string' ? rawFile.text : '',
+          createdAt: (typeof rawFile.createdAt === 'number' && isFinite(rawFile.createdAt))
+            ? rawFile.createdAt
+            : null
+        });
+      }
+    }
+
     return {
       ok: true,
       data: {
@@ -419,7 +518,10 @@ var Importer = (function (CONFIG, Util, Store) {
         dates: dates,
         pool: pool,          // null 表示文件里没有计划池，不是「有零条的池」
         templates: templates, // null 同理：文件里没有模板
-        reading: reading     // 同上：文件里没有阅读栏
+        reading: reading,    // 同上：文件里没有阅读栏
+        principles: principles,  // 同上：文件里没有原则池
+        skills: skills,          // 同上：文件里没有技能池
+        files: files             // 同上：文件里没有小文件
       }
     };
   }
@@ -523,6 +625,21 @@ var Importer = (function (CONFIG, Util, Store) {
    * 本地的计划池里，是不是已经有一条文本相同的任务。
    * 池没有象限和日期可比，判重只能按文本（见 DS 2.11 导入与合并）。
    */
+  /**
+   * 一个列表里有没有某段文字相同的条目（原则池 / 技能池 / 小文件判重共用）。
+   *
+   * key 默认是 'text'，小文件传 'name'。都走 Util.cleanText 再比 ——
+   * 「写日报」和「写日报 」（尾随空格）是同一件事。
+   */
+  function hasSameTextIn(list, value, key) {
+    var field = key || 'text';
+    var needle = Util.cleanText(value);
+    for (var i = 0; i < list.length; i++) {
+      if (Util.cleanText(list[i][field]) === needle) return true;
+    }
+    return false;
+  }
+
   function poolHasSameText(localData, text) {
     var pool = Array.isArray(localData.pool) ? localData.pool : [];
     for (var i = 0; i < pool.length; i++) {
@@ -628,6 +745,9 @@ var Importer = (function (CONFIG, Util, Store) {
             : Date.now(),
           items: {}
         };
+        // 模板自己的高亮跟着文件走（v2.12 需求 6；老文件是 null → 不写字段）。
+        // 注意它和模板里条目的 highlight 是两件事，各抄各的
+        if (incomingTpl.highlight) tpl.highlight = true;
         for (var mq = 0; mq < CONFIG.QUADRANT_IDS.length; mq++) {
           var mqid = CONFIG.QUADRANT_IDS[mq];
           tpl.items[mqid] = [];
@@ -688,6 +808,80 @@ var Importer = (function (CONFIG, Util, Store) {
       }
     }
 
+    // ---- 原则池（v2.12 需求 3）：和阅读栏同一条规矩 —— 判重只按**文本**，
+    // 两张表各判各的（同名的一条在「正在遵循」里、另一条在「参考原则」里
+    // 是两件事，不该互相吃掉）；新搬进来的换新 id
+    if (imported.principles) {
+      if (!localData.principles || typeof localData.principles !== 'object') {
+        localData.principles = { active: [], archived: [] };
+      }
+      var principleTables = ['active', 'archived'];
+      for (var pt = 0; pt < principleTables.length; pt++) {
+        var pTable = principleTables[pt];
+        if (!Array.isArray(localData.principles[pTable])) localData.principles[pTable] = [];
+        var incomingPrinciples = imported.principles[pTable] || [];
+        for (var pi = 0; pi < incomingPrinciples.length; pi++) {
+          var incomingPrinciple = incomingPrinciples[pi];
+          if (hasSameTextIn(localData.principles[pTable], incomingPrinciple.text)) {
+            skipped++;
+            continue;
+          }
+          localData.principles[pTable].push({
+            id: Util.genId(),
+            text: incomingPrinciple.text,
+            createdAt: incomingPrinciple.createdAt !== null
+              ? incomingPrinciple.createdAt
+              : Date.now()
+          });
+          added++;
+        }
+      }
+    }
+
+    // ---- 技能池（v2.12 需求 4）：判重同样按文本，跳过的保留本地那条
+    // （连本地记的日期一起留着，不被文件覆盖 —— 和阅读栏同一条）
+    if (Array.isArray(imported.skills)) {
+      if (!Array.isArray(localData.skills)) localData.skills = [];
+      for (var si = 0; si < imported.skills.length; si++) {
+        var incomingSkill = imported.skills[si];
+        if (hasSameTextIn(localData.skills, incomingSkill.text)) {
+          skipped++;
+          continue;
+        }
+        localData.skills.push({
+          id: Util.genId(),
+          text: incomingSkill.text,
+          date: incomingSkill.date || null,
+          createdAt: incomingSkill.createdAt !== null
+            ? incomingSkill.createdAt
+            : Date.now()
+        });
+        added++;
+      }
+    }
+
+    // ---- 小文件（v2.12 需求 2）：判重按**文件名**（同名视为同一个文件，
+    // 跳过时保留本地那份内容，不被文件覆盖）；新搬进来的换新 id
+    if (Array.isArray(imported.files)) {
+      if (!Array.isArray(localData.files)) localData.files = [];
+      for (var fi = 0; fi < imported.files.length; fi++) {
+        var incomingFile = imported.files[fi];
+        if (hasSameTextIn(localData.files, incomingFile.name, 'name')) {
+          skipped++;
+          continue;
+        }
+        localData.files.push({
+          id: Util.genId(),
+          name: incomingFile.name,
+          text: incomingFile.text,
+          createdAt: incomingFile.createdAt !== null
+            ? incomingFile.createdAt
+            : Date.now()
+        });
+        added++;
+      }
+    }
+
     return { added: added, skipped: skipped, data: localData };
   }
 
@@ -719,7 +913,11 @@ var Importer = (function (CONFIG, Util, Store) {
       dates: {},
       pool: [],
       templates: [],
-      reading: { active: [], done: [] }
+      reading: { active: [], done: [] },
+      // v2.12 的三个板块：覆盖导入时同样从零开始，文件里没有就留空
+      principles: { active: [], archived: [] },
+      skills: [],
+      files: []
     };
     return merge(empty, imported);
   }

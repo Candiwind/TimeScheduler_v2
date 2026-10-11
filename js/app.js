@@ -22,7 +22,7 @@ var App = (function (CONFIG, Util, Store, Toast, Theme, Render, TaskOps, Drag, D
     data: null,
     date: null,
     /**
-     * 当前正在编辑的东西，十种取值：
+     * 当前正在编辑的东西，取值：
      *   null                                                   没在编辑
      *   { mode: 'add',        quadrantId }                    正在新增任务
      *   { mode: 'edit-task',  quadrantId, taskId }            正在改任务文字
@@ -36,6 +36,13 @@ var App = (function (CONFIG, Util, Store, Toast, Theme, Render, TaskOps, Drag, D
      *   { mode: 'add-pool-block' }                            正在往计划池添加任务块（需求 4）
      *   { mode: 'add-pool-block-task', blockId }              正在往池内某块添加任务（需求 4）
      *   { mode: 'rename-template', templateId }               正在改某份模板的名字（见 DS 2.14）
+     *   { mode: 'add-reading' } / { mode: 'edit-reading', readingItemId }
+     *   { mode: 'edit-reading-start', readingItemId }         阅读栏（v2.8）
+     *   { mode: 'add-principle' } / { mode: 'edit-principle', principleId }
+     *                                                         原则池（v2.12 需求 3）
+     *   { mode: 'add-skill' } / { mode: 'edit-skill', skillId }
+     *   { mode: 'edit-skill-date', skillId }                  技能池（v2.12 需求 4）
+     *   { mode: 'add-file' } / { mode: 'rename-file', fileId } 小文件（v2.12 需求 2）
      * 同一时刻只允许有一个 —— 两个输入框同时开着，用户根本不知道该提交哪个。
      */
     editing: null,
@@ -63,6 +70,18 @@ var App = (function (CONFIG, Util, Store, Toast, Theme, Render, TaskOps, Drag, D
      * （同一份存取、同一个 key，见 DS 2.38），刷新后保持。
      */
     collapsedPanels: {},
+
+    /**
+     * 哪些**板**折叠了（v2.13 需求）：四象限的每一个象限、时间视图的每一个时段块。
+     * 键是 `q:I` … `q:IV` 和 `tv:早上` … `tv:晚上`（见 render.boardKey）。
+     *
+     * 和 collapsedPanels 是**两张独立的表、两套默认值**：
+     *   - 六个大板块（计划池等）默认**收起**（v2.12 需求 10）；
+     *   - 象限和时段块默认**展开** —— 一进 App 就要看见今天的任务。
+     * 所以合成一张表会出现「想让象限默认开、面板默认关」没法表达的情况。
+     * 两张表都住在 foldState 里（界面状态，不进主数据），刷新后保持。
+     */
+    collapsedBoards: {},
 
     /**
      * 主区域显示哪个视图（DS 2.13）：'quadrants' 四象限 + 计划池，'time' 时间视图。
@@ -186,13 +205,61 @@ var App = (function (CONFIG, Util, Store, Toast, Theme, Render, TaskOps, Drag, D
     renderCurrent();
   }
 
-  /** 把折叠 / 展开状态落到本机，刷新后保持（需求 5；v2.8 起连板块收起一起） */
+  /**
+   * 折叠 / 展开**一块板**（v2.13 需求）：四象限的某一个象限、或时间视图的某一个时段块。
+   *
+   * 和 togglePanel 是两件事，别合并：
+   *   - 板（象限 / 时段块）默认**展开**，收起来只影响它自己那一格；
+   *   - 六个大板块默认**收起**，白名单也不同。
+   *
+   * `data-board` 是从 DOM 传上来的（理论上可以被手工改），所以这里按格式
+   * **白名单校验**：必须是 `q:<合法象限 id>` 或 `tv:<合法时段名>`，
+   * 认不出的直接忽略，别往本机塞脏键（和 togglePanel 同一条理由，见 R-36）。
+   */
+  function toggleBoard(boardId) {
+    var parts = String(boardId || '').split(':');
+    if (parts.length !== 2) return;
+
+    var ok = (parts[0] === 'q' && CONFIG.QUADRANT_IDS.indexOf(parts[1]) !== -1) ||
+             (parts[0] === 'tv' && CONFIG.SLOTS.indexOf(parts[1]) !== -1);
+    if (!ok) return;
+
+    if (state.collapsedBoards[boardId]) delete state.collapsedBoards[boardId];
+    else state.collapsedBoards[boardId] = true;
+    persistFoldState();
+    renderCurrent();
+  }
+
+  /**
+   * 把折叠 / 展开状态落到本机，刷新后保持（需求 5；v2.8 起连板块收起、
+   * v2.13 起连「象限 / 时段块」的折叠一起）。
+   */
   function persistFoldState() {
     Store.setFoldState({
       expanded: state.expanded,
       collapsedBlocks: state.collapsedBlocks,
-      collapsedPanels: state.collapsedPanels
+      collapsedPanels: state.collapsedPanels,
+      collapsedBoards: state.collapsedBoards
     });
+  }
+
+  /**
+   * 板块的**出厂默认**：全部收起（v2.12 需求 10）。
+   *
+   * 需求原话是「各个板块（包括计划池、模板池和阅读池）都要默认关闭状态，
+   * 需要手动点击后才能打开。首次打开后，下一次刷新时保持上次的最新状态」。
+   *
+   * 这份默认只在「用户一次都没动过」时用得上 —— 判断依据是
+   * `Store.getFoldState().collapsedPanels === null`（没有记录 / 老版本留下的
+   * JSON 里没有这一项）。只要用户点过一次收起或展开，本机就有了这份状态，
+   * 之后一律以本机记录为准（哪怕六个板块全点开了，那也是「空表」而不是 null）。
+   */
+  function defaultCollapsedPanels() {
+    var map = {};
+    for (var i = 0; i < CONFIG.PANEL_IDS.length; i++) {
+      map[CONFIG.PANEL_IDS[i]] = true;
+    }
+    return map;
   }
 
   // -------------------------------------------------------------------------
@@ -260,6 +327,8 @@ var App = (function (CONFIG, Util, Store, Toast, Theme, Render, TaskOps, Drag, D
       collapsedBlocks: state.collapsedBlocks,
       // 板块收起（v2.8 需求 3）：界面状态，画的时候落成 is-collapsed 类名
       collapsedPanels: state.collapsedPanels,
+      // 象限 / 时段块的折叠（v2.13 需求）：同一类界面状态，画进各自的 section
+      collapsedBoards: state.collapsedBoards,
       // 进度按「最细的可勾选单位」算，任务自己有阶段数阶段、块数块内 ——
       // 算法只有 task-ops 一份（见 render.js 里 fallbackProgress 的说明）
       progressOf: TaskOps.progressOfItem,
@@ -268,14 +337,22 @@ var App = (function (CONFIG, Util, Store, Toast, Theme, Render, TaskOps, Drag, D
       // 模板同样是全局列表（见 DS 2.14）
       templates: Array.isArray(state.data.templates) ? state.data.templates : [],
       // 阅读栏（v2.8 需求 2）：也是全局的，跟日期无关
-      reading: TaskOps.ensureReading(state.data)
+      reading: TaskOps.ensureReading(state.data),
+      // 原则池 / 技能池 / 小文件（v2.12 需求 2/3/4）：同上，都是全局的。
+      // 小文件额外带上用量（头部要报 n/10 个文件 · xx KB / 1MB，超了标红）
+      principles: TaskOps.ensurePrinciples(state.data),
+      skills: TaskOps.ensureSkills(state.data),
+      files: TaskOps.ensureFiles(state.data),
+      fileStats: TaskOps.getFilesStats(state.data)
     });
     // 时间视图是另一份内容（按时段分组，DS 2.13）：开着就重画它；
     // 显示哪一边由 setViewMode 的 hidden 开关决定，两边内容都在 DOM 里
     if (state.view === 'time') {
       var groups = TaskOps.getTimeView(state.data, state.date);
       Render.renderTimeView(kw ? TaskOps.filterTimeViewByKeyword(groups, kw) : groups, {
-        editing: quadrantEditing
+        editing: quadrantEditing,
+        // 时段块的折叠（v2.13 需求）：和象限一样，各收各的
+        collapsedBoards: state.collapsedBoards
       });
     }
     Render.setViewMode(state.view);
@@ -453,7 +530,8 @@ var App = (function (CONFIG, Util, Store, Toast, Theme, Render, TaskOps, Drag, D
     // 看着就像「日期设定坏了」（见 DS R-40）。test-reading.js 有一条自动守卫
     // 盯着这张清单：render.js 里画出来的输入框 class 必须都在这儿。
     var input = document.querySelector(
-      '.stage__input, .task__input, .pool__date-input, .reading__start-input');
+      '.stage__input, .task__input, .pool__date-input, .reading__start-input, ' +
+      '.skills__date-input, .files__name-input');
     var value = input ? input.value : '';
 
     // ---- 新增（任务、阶段、任务块或池内任务）----
@@ -464,7 +542,8 @@ var App = (function (CONFIG, Util, Store, Toast, Theme, Render, TaskOps, Drag, D
     if (editing.mode === 'add' || editing.mode === 'add-stage' ||
         editing.mode === 'add-block' || editing.mode === 'add-pool' ||
         editing.mode === 'add-pool-block' || editing.mode === 'add-pool-block-task' ||
-        editing.mode === 'add-reading') {
+        editing.mode === 'add-reading' || editing.mode === 'add-principle' ||
+        editing.mode === 'add-skill' || editing.mode === 'add-file') {
       // 点了「＋」又反悔 —— 安静地取消就好。这时候弹「内容不能为空」
       // 是在骂用户，他本来就没想提交任何东西
       if (!Util.isValidTaskText(value)) {
@@ -491,6 +570,15 @@ var App = (function (CONFIG, Util, Store, Toast, Theme, Render, TaskOps, Drag, D
       } else if (editing.mode === 'add-pool-block-task') {
         // 需求 4：往池内某块加任务，默认完成时间 = 当前查看日期 + 7 天
         added = TaskOps.addPoolBlockTask(state.data, state.date, editing.blockId, value);
+      } else if (editing.mode === 'add-principle') {
+        // v2.12 需求 3：原则池，没有任何日期
+        added = TaskOps.addPrinciple(state.data, value);
+      } else if (editing.mode === 'add-skill') {
+        // v2.12 需求 4：日期默认是「加进来的那天」，行上再改
+        added = TaskOps.addSkill(state.data, value, null);
+      } else if (editing.mode === 'add-file') {
+        // v2.12 需求 2：新建的是**空文件**（内容点文件名进去写；空内容合法）
+        added = TaskOps.addFile(state.data, value, '');
       } else {
         added = TaskOps.addBlock(state.data, state.date, editing.quadrantId, value);
       }
@@ -519,6 +607,18 @@ var App = (function (CONFIG, Util, Store, Toast, Theme, Render, TaskOps, Drag, D
     } else if (editing.mode === 'edit-reading-start') {
       // 清空提交 = 起始日期回「未设定」（不是删除条目，和池里清 DDL 同款）
       edited = TaskOps.setReadingStart(state.data, editing.readingItemId, value);
+    } else if (editing.mode === 'edit-principle') {
+      // v2.12 需求 3：原则改名（改空拒绝、原名保留，和任务同款）
+      edited = TaskOps.editPrinciple(state.data, editing.principleId, value);
+    } else if (editing.mode === 'edit-skill') {
+      // v2.12 需求 4：技能改名
+      edited = TaskOps.editSkill(state.data, editing.skillId, value);
+    } else if (editing.mode === 'edit-skill-date') {
+      // 日期框清空提交 = 清成「未设定」（同池里 / 阅读栏的那两个框）
+      edited = TaskOps.setSkillDate(state.data, editing.skillId, value);
+    } else if (editing.mode === 'rename-file') {
+      // v2.12 需求 2：改文件名（改空拒绝、原名保留）
+      edited = TaskOps.renameFile(state.data, editing.fileId, value);
     } else if (editing.mode === 'edit-pool-date') {
       // 输入框清空提交 = 清除完成时间，任务回「未设定」继续留在池里（DS 2.11 二期）
       edited = (value === '')
@@ -964,6 +1064,15 @@ var App = (function (CONFIG, Util, Store, Toast, Theme, Render, TaskOps, Drag, D
     root.addEventListener('click', function (e) {
       var target = e.target;
 
+      // 连续双击 → 给这份模板整体加 / 取消高亮（v2.12 需求 6：
+      // 「双击 Highlight，Highlight 方式和之前的任务 Highlight 一样」）。
+      // 和任务那三处一样，必须在最前面判 —— 第二下不再走下面的分流
+      if (e.detail >= 2) {
+        handleSecondClick();
+        return;
+      }
+      state.clickHit = rememberHit(hitOfTemplate(target));
+
       // 收起 / 展开（v2.8 需求 3）—— 纯界面动作，保护模式下也放行
       var toggle = closest(target, 'panel__toggle');
       if (toggle) {
@@ -983,7 +1092,9 @@ var App = (function (CONFIG, Util, Store, Toast, Theme, Render, TaskOps, Drag, D
         if (templateId) doApplyTemplate(templateId);
         return;
       }
-      if (closest(target, 'tpl__rename')) {
+      // v2.12 需求 6：**单击名字就改名**（那个单独的「改名」按钮去掉了，和任务
+      // 「点文字改名」一个手感）；双击名字则是上面那条高亮
+      if (closest(target, 'tpl__name')) {
         if (templateId) startRenameTemplate(templateId);
         return;
       }
@@ -1189,6 +1300,444 @@ var App = (function (CONFIG, Util, Store, Toast, Theme, Render, TaskOps, Drag, D
   }
 
   // -------------------------------------------------------------------------
+  // 原则池（v2.12 需求 3，见 DS 2.48）
+  //
+  // 和阅读栏是同一个形状：头部「＋」加一条，勾一下从「正在遵循」归档到
+  // 「参考原则」，归档那边能「↩」放回来、也能删。**没有一个日期字段** ——
+  // 需求原话是「去掉时间相关信息的记录」。
+  // -------------------------------------------------------------------------
+
+  function principleIdOf(node) {
+    var item = closest(node, 'principles__item');
+    return item ? item.getAttribute('data-id') : null;
+  }
+
+  function startAddPrinciple() {
+    if (Store.isProtectionMode()) return;
+    commitEdit();
+    state.editing = { mode: 'add-principle' };
+    renderCurrent();
+    Render.focusEditor(false);
+  }
+
+  function startEditPrinciple(id) {
+    if (Store.isProtectionMode()) return;
+    commitEdit();
+    state.editing = { mode: 'edit-principle', principleId: id };
+    renderCurrent();
+    Render.focusEditor(true);
+  }
+
+  /** 归档一条原则（勾选框勾上）—— 原地改一个字段，保留滚动位置 */
+  function doArchivePrinciple(id) {
+    if (Store.isProtectionMode()) return;
+    var result = TaskOps.archivePrinciple(state.data, id);
+    if (result.ok) persist();
+    renderCurrent({ keepScroll: true });
+  }
+
+  function doRestorePrinciple(id) {
+    if (Store.isProtectionMode()) return;
+    var result = TaskOps.restorePrinciple(state.data, id);
+    if (result.ok) persist();
+    renderCurrent();
+  }
+
+  function doRemovePrinciple(id) {
+    if (Store.isProtectionMode()) return;
+    var result = TaskOps.removePrinciple(state.data, id);
+    if (result.ok) {
+      persist();
+      Toast.show('已删除原则「' + result.item.text + '」');
+    }
+    renderCurrent();
+  }
+
+  /**
+   * 原则池自己的事件。和阅读栏 / 计划池那套一样：独立子树，各绑各的。
+   * 收起三角排在最前面 —— 它是纯界面动作，保护模式下也照常能点（见 DS 2.38）。
+   */
+  function bindPrinciples() {
+    var root = document.getElementById('principles');
+    if (!root) return;
+
+    root.addEventListener('click', function (e) {
+      var target = e.target;
+
+      var toggle = closest(target, 'panel__toggle');
+      if (toggle) {
+        togglePanel(toggle.getAttribute('data-panel'));
+        return;
+      }
+
+      if (closest(target, 'principles__add')) {
+        startAddPrinciple();
+        return;
+      }
+
+      var id = principleIdOf(target);
+      if (!id) return;
+
+      if (closest(target, 'principles__check')) {
+        commitEdit();
+        if (target.checked) doArchivePrinciple(id);
+        else doRestorePrinciple(id);   // 取消勾 = 放回来（点错了的退路）
+        return;
+      }
+
+      if (closest(target, 'principles__restore')) {
+        commitEdit();
+        doRestorePrinciple(id);
+        return;
+      }
+
+      if (closest(target, 'principles__del')) {
+        commitEdit();
+        doRemovePrinciple(id);
+        return;
+      }
+
+      if (closest(target, 'principles__text')) {
+        startEditPrinciple(id);
+        return;
+      }
+    });
+
+    // 编辑框：文字框复用 task__input（键盘 / 失焦那套和别处共用）
+    root.addEventListener('keydown', function (e) {
+      if (!closest(e.target, 'task__input')) return;
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        commitEdit();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        cancelEdit();
+      }
+    });
+
+    root.addEventListener('focusout', function (e) {
+      if (!closest(e.target, 'task__input')) return;
+      var input = e.target;
+      setTimeout(function () {
+        if (!document.body.contains(input)) return;
+        commitEdit();
+      }, 0);
+    });
+  }
+
+  // -------------------------------------------------------------------------
+  // 技能池（v2.12 需求 4，见 DS 2.49）
+  //
+  // 一条技能 = 文字 + 日期。日期默认是**加进来的那天**，行上点日期能改、
+  // 编辑态里的「清除」清成「未设定」—— 和计划池的完成时间、阅读栏的起始日期
+  // 是同一个控件、同一套提交方式（见 D-70）。
+  // -------------------------------------------------------------------------
+
+  function skillIdOf(node) {
+    var item = closest(node, 'skills__item');
+    return item ? item.getAttribute('data-id') : null;
+  }
+
+  function startAddSkill() {
+    if (Store.isProtectionMode()) return;
+    commitEdit();
+    state.editing = { mode: 'add-skill' };
+    renderCurrent();
+    Render.focusEditor(false);
+  }
+
+  function startEditSkill(id) {
+    if (Store.isProtectionMode()) return;
+    commitEdit();
+    state.editing = { mode: 'edit-skill', skillId: id };
+    renderCurrent();
+    Render.focusEditor(true);
+  }
+
+  function startEditSkillDate(id) {
+    if (Store.isProtectionMode()) return;
+    commitEdit();
+    state.editing = { mode: 'edit-skill-date', skillId: id };
+    renderCurrent();
+    // 日期框不 select()（对 <input type="date"> 没意义，和池里同款）
+    Render.focusEditor(false);
+  }
+
+  function doSetSkillDate(id, dateStr) {
+    if (Store.isProtectionMode()) return;
+    // 先把手上的编辑落下 —— 少了这句，点「清除」之后编辑框会原地不动（同 D-70）
+    commitEdit();
+
+    var result = TaskOps.setSkillDate(state.data, id, dateStr);
+    if (result.ok) {
+      persist();
+      if (dateStr === null) Toast.show('已清除日期。');
+    } else if (result.error === TaskOps.ERR.BAD_DATE) {
+      Toast.warn('日期格式不对，已保持原来的设定。');
+    }
+    renderCurrent();
+  }
+
+  function doRemoveSkill(id) {
+    if (Store.isProtectionMode()) return;
+    var result = TaskOps.removeSkill(state.data, id);
+    if (result.ok) {
+      persist();
+      Toast.show('已删除技能「' + result.item.text + '」');
+    }
+    renderCurrent();
+  }
+
+  function bindSkills() {
+    var root = document.getElementById('skills');
+    if (!root) return;
+
+    root.addEventListener('click', function (e) {
+      var target = e.target;
+
+      var toggle = closest(target, 'panel__toggle');
+      if (toggle) {
+        togglePanel(toggle.getAttribute('data-panel'));
+        return;
+      }
+
+      if (closest(target, 'skills__add')) {
+        startAddSkill();
+        return;
+      }
+
+      var id = skillIdOf(target);
+      if (!id) return;
+
+      if (closest(target, 'skills__date-clear')) {
+        doSetSkillDate(id, null);
+        return;
+      }
+
+      if (closest(target, 'skills__date')) {
+        startEditSkillDate(id);
+        return;
+      }
+
+      if (closest(target, 'skills__del')) {
+        commitEdit();
+        doRemoveSkill(id);
+        return;
+      }
+
+      if (closest(target, 'skills__text')) {
+        startEditSkill(id);
+        return;
+      }
+    });
+
+    // 键盘 / 失焦：文字框是 task__input，日期框是 skills__date-input（和池里同款）
+    root.addEventListener('keydown', function (e) {
+      if (!closest(e.target, 'task__input') && !closest(e.target, 'skills__date-input')) return;
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        commitEdit();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        cancelEdit();
+      }
+    });
+
+    root.addEventListener('focusout', function (e) {
+      if (!closest(e.target, 'task__input') && !closest(e.target, 'skills__date-input')) return;
+      var input = e.target;
+      setTimeout(function () {
+        if (!document.body.contains(input)) return;
+        commitEdit();
+      }, 0);
+    });
+  }
+
+  // -------------------------------------------------------------------------
+  // 小文件（v2.12 需求 2，见 DS 2.50）
+  //
+  // 「我存的一些小文件」，只支持 txt：导入拦后缀、导出补 .txt。
+  // 点文件名打开内容编辑器（文件的主要内容是正文），「✎」改名，「导出」下载。
+  // 「1MB / 10 个」是**软提示**（头部标红），但单个文件超过 1MB 会被挡下来 ——
+  // 主数据整份存在 localStorage 里、还带 4 份滚动备份，放进来会把配额撑爆，
+  // 之后连正常任务都存不下（见 DS 5.2 的风险条）。
+  // -------------------------------------------------------------------------
+
+  function fileIdOf(node) {
+    var item = closest(node, 'files__item');
+    return item ? item.getAttribute('data-id') : null;
+  }
+
+  function importTxtFile(file) {
+    if (Store.isProtectionMode()) return;
+
+    if (!Util.isTxtFileName(file.name)) {
+      Toast.warn('只支持 .txt 文件。');
+      return;
+    }
+    if (file.size > CONFIG.FILES_MAX_BYTES) {
+      Toast.warn('这个文件超过 1MB，收进来会撑爆本机存储，先拆小一点吧。');
+      return;
+    }
+
+    var reader = new FileReader();
+    reader.onload = function () {
+      var result = TaskOps.addFile(state.data, Util.safeFileName(file.name, 'file.txt'),
+                                    String(reader.result));
+      if (!result.ok) {
+        Toast.warn('文件名不合法，没有导入。');
+        renderCurrent();
+        return;
+      }
+      if (persist()) {
+        var stats = TaskOps.getFilesStats(state.data);
+        Toast.success('已导入「' + result.file.name + '」。' +
+          (stats.over
+            ? '注意：已经超过建议的 1MB / 10 个文件上限。'
+            : ''));
+      }
+      renderCurrent();
+    };
+    reader.onerror = function () { Toast.error('读取文件失败。'); };
+    reader.readAsText(file, 'utf-8');
+  }
+
+  function startAddFile() {
+    if (Store.isProtectionMode()) return;
+    commitEdit();
+    state.editing = { mode: 'add-file' };
+    renderCurrent();
+    Render.focusEditor(true);
+  }
+
+  function startRenameFile(id) {
+    if (Store.isProtectionMode()) return;
+    commitEdit();
+    state.editing = { mode: 'rename-file', fileId: id };
+    renderCurrent();
+    Render.focusEditor(true);
+  }
+
+  /** 打开内容编辑器：点「保存」才写回去，取消一个字节不动 */
+  function openFileEditor(id) {
+    if (Store.isProtectionMode()) return;
+    commitEdit();
+
+    var found = TaskOps.findFile(state.data, id);
+    if (!found) return;
+
+    Render.openEditor({
+      title: found.item.name,
+      message: '内容会原样存下来；导出时写成 .txt 文件。'
+    }, found.item.text, function (text) {
+      var result = TaskOps.setFileText(state.data, id, text);
+      if (result.ok) persist();
+      renderCurrent();
+    });
+  }
+
+  function doExportFile(id) {
+    var found = TaskOps.findFile(state.data, id);
+    if (!found) return;
+
+    try {
+      Exporter.exportTextFile(found.item.name, found.item.text);
+      if (!Exporter.isNative()) Toast.success('已开始下载「' + found.item.name + '」。');
+    } catch (err) {
+      Toast.error('导出失败：' + ((err && err.message) || '未知原因'));
+    }
+  }
+
+  function doRemoveFile(id) {
+    if (Store.isProtectionMode()) return;
+    var result = TaskOps.removeFile(state.data, id);
+    if (result.ok) {
+      persist();
+      Toast.show('已删除「' + result.file.name + '」');
+    }
+    renderCurrent();
+  }
+
+  function bindFiles() {
+    var root = document.getElementById('files');
+    if (!root) return;
+    var input = document.getElementById('file-text-input');
+
+    root.addEventListener('click', function (e) {
+      var target = e.target;
+
+      var toggle = closest(target, 'panel__toggle');
+      if (toggle) {
+        togglePanel(toggle.getAttribute('data-panel'));
+        return;
+      }
+
+      if (closest(target, 'files__add')) {
+        startAddFile();
+        return;
+      }
+
+      if (closest(target, 'files__load')) {
+        if (Store.isProtectionMode()) return;
+        if (input) {
+          input.value = '';   // 连着导同一个文件也要能触发 change
+          input.click();
+        }
+        return;
+      }
+
+      var id = fileIdOf(target);
+      if (!id) return;
+
+      if (closest(target, 'files__open')) {
+        openFileEditor(id);
+        return;
+      }
+      if (closest(target, 'files__rename')) {
+        startRenameFile(id);
+        return;
+      }
+      if (closest(target, 'files__export')) {
+        doExportFile(id);
+        return;
+      }
+      if (closest(target, 'files__del')) {
+        commitEdit();
+        doRemoveFile(id);
+        return;
+      }
+    });
+
+    if (input) {
+      input.addEventListener('change', function () {
+        var file = input.files && input.files[0];
+        if (file) importTxtFile(file);
+      });
+    }
+
+    // 改名输入框复用 task__input（键盘 / 失焦那套和别处共用）
+    root.addEventListener('keydown', function (e) {
+      if (!closest(e.target, 'task__input')) return;
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        commitEdit();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        cancelEdit();
+      }
+    });
+
+    root.addEventListener('focusout', function (e) {
+      if (!closest(e.target, 'task__input')) return;
+      var box = e.target;
+      setTimeout(function () {
+        if (!document.body.contains(box)) return;
+        commitEdit();
+      }, 0);
+    });
+  }
+
+  // -------------------------------------------------------------------------
   // 阶段
   // -------------------------------------------------------------------------
 
@@ -1363,8 +1912,26 @@ var App = (function (CONFIG, Util, Store, Toast, Theme, Render, TaskOps, Drag, D
     return null;
   }
 
+  /**
+   * 点到了哪一条（模板池，v2.12 需求 6）：模板只有一层，没有「块里套块」
+   * 那种要从里往外分的情况 —— 找到那一行就是它。
+   */
+  function hitOfTemplate(target) {
+    if (isControlNode(target)) return null;
+
+    var item = closest(target, 'tpl__item');
+    if (!item) return null;
+    var id = item.getAttribute('data-id');
+    return id ? { list: 'tpl', kind: 'template', templateId: id } : null;
+  }
+
   /** 取出这一条的数据对象（决定高亮要翻成什么）；已经不存在了返回 null */
   function findHighlightTarget(hit) {
+    if (hit.list === 'tpl') {
+      var tpl = TaskOps.findTemplate(state.data, hit.templateId);
+      return tpl ? tpl.template : null;
+    }
+
     if (hit.list === 'pool') {
       var inPool = TaskOps.locatePoolItem(state.data, hit.poolItemId);
       return inPool ? inPool.item : null;
@@ -1409,7 +1976,9 @@ var App = (function (CONFIG, Util, Store, Toast, Theme, Render, TaskOps, Drag, D
     var on = !(target.highlight === true);
     var result;
 
-    if (hit.list === 'pool') {
+    if (hit.list === 'tpl') {
+      result = TaskOps.setTemplateHighlight(state.data, hit.templateId, on);
+    } else if (hit.list === 'pool') {
       result = TaskOps.setPoolHighlight(state.data, hit.poolItemId, on);
     } else if (hit.kind === 'stage') {
       result = TaskOps.setStageHighlight(state.data, state.date, hit.quadrantId,
@@ -1475,6 +2044,15 @@ var App = (function (CONFIG, Util, Store, Toast, Theme, Render, TaskOps, Drag, D
 
       // 第一下：照常走下面的分流，顺便记下「点到了哪一条」给双击的第二下用
       state.clickHit = rememberHit(hitOfQuadrant(target));
+
+      // 象限头上的折叠三角（v2.13 需求）：纯界面动作，保护模式下也放行
+      // （和六个大板块的 panel__toggle 同一条口径）
+      var boardToggle = closest(target, 'board__toggle');
+      if (boardToggle) {
+        commitEdit();   // 手上没提交的编辑先落下，别丢字
+        toggleBoard(boardToggle.getAttribute('data-board'));
+        return;
+      }
 
       // 展开 / 收起阶段
       if (closest(target, 'task__toggle')) {
@@ -1733,6 +2311,14 @@ var App = (function (CONFIG, Util, Store, Toast, Theme, Render, TaskOps, Drag, D
         return;
       }
       state.clickHit = rememberHit(hitOfTimeView(target));
+
+      // 时段块头上的折叠三角（v2.13 需求）：和象限里同一个处理
+      var tvBoardToggle = closest(target, 'board__toggle');
+      if (tvBoardToggle) {
+        commitEdit();
+        toggleBoard(tvBoardToggle.getAttribute('data-board'));
+        return;
+      }
 
       // 删除（任务走 doRemoveItem、阶段走 doRemoveStage，和象限同一批函数。
       // 属性要在 commitEdit 之前取好 —— 提交会重画，节点会被换掉）
@@ -2009,6 +2595,12 @@ var App = (function (CONFIG, Util, Store, Toast, Theme, Render, TaskOps, Drag, D
       } else if (format === 'md') {
         // v2.6 需求 4：日报只记**当前查看的那一天**（JSON / ZIP 仍是整份存档）
         Exporter.exportMarkdown(state.data, undefined, state.date);
+      } else if (format === 'skills') {
+        // v2.12 需求 5：技能池清单（.md）
+        Exporter.exportSkills(state.data);
+      } else if (format === 'reading') {
+        // v2.12 需求 5：已读书籍清单（.md）
+        Exporter.exportReadingList(state.data);
       } else {
         Exporter.exportZip(state.data);
       }
@@ -2323,11 +2915,16 @@ var App = (function (CONFIG, Util, Store, Toast, Theme, Render, TaskOps, Drag, D
     handleLoadResult(Store.load());
 
     // 需求 5：把本机记住的折叠 / 展开状态读回来（读不出就回到默认折叠 / 展开）。
-    // v2.8 需求 3 起，三个板块的收起状态也在这一份里（见 DS 2.38）
+    // v2.8 需求 3 起，各个板块的收起状态也在这一份里（见 DS 2.38）。
+    // v2.12 需求 10：**从没记录过**（null）时默认「六个板块全部收起」——
+    // 注意不能用 `|| {}`：那会变成「默认全部展开」，和需求正好相反；
+    // 而用户全点开之后本机存的确实是空表，那时也该保持全展开（见 getFoldState）。
     var fold = Store.getFoldState();
     state.expanded = fold.expanded;
     state.collapsedBlocks = fold.collapsedBlocks;
-    state.collapsedPanels = fold.collapsedPanels;
+    state.collapsedPanels = fold.collapsedPanels || defaultCollapsedPanels();
+    // v2.13：象限 / 时段块的折叠（默认空表 = 都展开，没有「默认收起」那回事）
+    state.collapsedBoards = fold.collapsedBoards || {};
 
     // 默认停在今天（见 DS 1.5）
     state.date = Util.todayStr();
@@ -2341,6 +2938,10 @@ var App = (function (CONFIG, Util, Store, Toast, Theme, Render, TaskOps, Drag, D
     bindReading();
     bindPool();
     bindTemplates();
+    // v2.12 的三个板块：各自独立子树，各绑各的（和阅读栏 / 计划池 / 模板一个形状）
+    bindPrinciples();
+    bindSkills();
+    bindFiles();
     bindDateNav();
     bindViewToggle();
     bindSearch();

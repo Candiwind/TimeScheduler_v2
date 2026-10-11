@@ -37,10 +37,19 @@ function slotsOf(groups) {
   return out.join(',');
 }
 
+/**
+ * v2.12 需求 8：`addTask` 会给新任务自动分配时段（第一、三象限按**此刻的钟点**）。
+ * 这些用例关心的是「时段顺序记忆」，所以把「此刻」钉死成一个固定钟点
+ * （20:00 = 晚上），否则跑测试的机器当时几点就会影响结果；随后再用 setSlot
+ * 设成用例真正要的时段（改时段不会触发需求 9 的排序，只有「新增」才触发）。
+ */
+var FIXED_NOW = new Date(2026, 9, 1, 20, 0);
+
 /** 加一条无阶段任务并设时段，返回它的 id */
 function addSlotted(data, text, slot, quadrant) {
-  var id = TaskOps.addTask(data, DATE, quadrant || 'I', text).task.id;
-  TaskOps.setSlot(data, DATE, quadrant || 'I', id, slot);
+  var q = quadrant || 'I';
+  var id = TaskOps.addTask(data, DATE, q, text, FIXED_NOW).task.id;
+  TaskOps.setSlot(data, DATE, q, id, slot);
   return id;
 }
 
@@ -52,15 +61,16 @@ t('同时段内把第一条拖到末尾，顺序记住', function () {
   var a = addSlotted(data, '甲', '早上');
   var b = addSlotted(data, '乙', '早上');
   var c = addSlotted(data, '丙', '早上');
-  // 新任务默认加在开头（需求 3）：展示顺序是 丙,乙,甲，最前的是「丙」
+  // v2.12 需求 9 起，加完就按完成时间排过一轮：三条都是「早上」→ 稳定排序，
+  // 保持加入顺序 甲,乙,丙（不再是「最后加的在最前」）
 
   TaskOps.moveTimeViewItem(data, DATE,
-    { dataKind: 'task', taskId: c, stageId: null, quadrantId: 'I', toSlot: '早上', index: 2 });
+    { dataKind: 'task', taskId: a, stageId: null, quadrantId: 'I', toSlot: '早上', index: 2 });
 
   var group = TaskOps.getTimeView(data, DATE)[0];
-  h.assertEqual(textsOf(group), '乙,甲,丙');
+  h.assertEqual(textsOf(group), '乙,丙,甲');
   h.assertEqual(data.dates[DATE].tv['早上'].join(','),
-    't:' + b + ',t:' + a + ',t:' + c, '键列表写进 tv');
+    't:' + b + ',t:' + c + ',t:' + a, '键列表写进 tv');
 });
 
 t('拖到最前', function () {
@@ -123,8 +133,11 @@ t('有记忆后，同时段新增的任务不在记忆里 → 排最前，记忆
   addSlotted(data, '丙', '早上'); // 象限视图新增
   h.assertEqual(textsOf(TaskOps.getTimeView(data, DATE)[0]), '丙,乙,甲');
 
-  addSlotted(data, '丁', '早上'); // 再新增一条，仍然排最前
-  h.assertEqual(textsOf(TaskOps.getTimeView(data, DATE)[0]), '丁,丙,乙,甲');
+  // 再新增一条：两条没进记忆的（丙、丁）一起排在最前，它们之间按象限列表的
+  // 顺序（需求 9 排过之后 丙 在 丁 前面）——「新的压过旧的」只在**同一条**
+  // 记忆之外时成立，两条都没记忆时不再分谁更新（见 DS 2.48）
+  addSlotted(data, '丁', '早上');
+  h.assertEqual(textsOf(TaskOps.getTimeView(data, DATE)[0]), '丙,丁,乙,甲');
 });
 
 t('任务刚设上时段（原来没时段）也排最前', function () {
@@ -204,18 +217,20 @@ h.group('完成沉底（需求 6）：任务、块内任务、阶段、时间视
 
 t('勾选完成 → 象限列表末尾 + 时间视图键沉底', function () {
   var data = Store.createEmpty();
-  // 先加乙再加甲，让「甲」排在前面（新任务默认加在开头，需求 3）
+  // 需求 9 排过之后两条都是「早上」→ 稳定排序保持加入顺序：列表是 [乙, 甲]
   var b = addSlotted(data, '乙', '早上');
   var a = addSlotted(data, '甲', '早上');
 
-  TaskOps.toggleTask(data, DATE, 'I', a, true);
+  // 勾**排在前面**的那条（乙）：它沉到末尾，时间视图的键跟着沉底
+  // （沉底只对「本来不在末尾」的条目动手；已在末尾的什么都不做）
+  TaskOps.toggleTask(data, DATE, 'I', b, true);
 
-  // 象限顺序：甲沉到末尾
-  h.assertEqual(data.dates[DATE].I[0].text, '乙');
-  h.assertEqual(data.dates[DATE].I[1].text, '甲');
+  // 象限顺序：乙沉到末尾
+  h.assertEqual(data.dates[DATE].I[0].text, '甲');
+  h.assertEqual(data.dates[DATE].I[1].text, '乙');
   // 时间视图键也沉底
   h.assertEqual(data.dates[DATE].tv['早上'].join(','),
-    't:' + b + ',t:' + a);
+    't:' + a + ',t:' + b);
 });
 
 t('阶段不沉底：阶段顺序永远不动，父任务完成时整体沉底', function () {

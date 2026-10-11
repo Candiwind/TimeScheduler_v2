@@ -75,11 +75,16 @@ t('多份的容器（象限 / 时间视图）靠 data 属性分键', function ()
   h.assertEqual(bySel['.timeview__list'].attr, 'data-slot',
     '时间视图每个时间栏该按 data-slot 分别记');
 
-  // 这两条要和 render.js 真正画出来的属性对上 —— 对不上就一个也贴不回去
+  // 这两条要和 render.js 真正画出来的属性对上 —— 对不上就一个也贴不回去。
+  // v2.13 起两处的 class 后面都可能跟一个 ` is-collapsed`（折叠状态），
+  // 所以这里不再拿「class="xxx" data-…="」整串比，改成分开认：
+  // class 前缀在、data 属性在，就说明键定得出来（真正的行为由
+  // test-board-fold.js 用真实渲染出来的 HTML 断言）。
   h.assertTrue(renderSrc.indexOf('class="quadrant quadrant--') !== -1 &&
     renderSrc.indexOf('data-quadrant="') !== -1,
     'render.js 里象限元素上没有 data-quadrant，键定不出来');
-  h.assertTrue(renderSrc.indexOf('class="timeview__group" data-slot="') !== -1,
+  h.assertTrue(renderSrc.indexOf('class="timeview__group') !== -1 &&
+    renderSrc.indexOf('" data-slot="') !== -1,
     'render.js 里时段组上没有 data-slot，键定不出来');
 });
 

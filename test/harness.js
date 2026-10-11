@@ -151,6 +151,56 @@ function createMemoryStorage(options) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// 导出的「文件名」怎么测
+// ---------------------------------------------------------------------------
+
+/**
+ * 把一次导出拦下来，返回它用的文件名（没有导出就返回 null）。
+ *
+ * `Exporter` 的下载走的是两层：**生成内容**（纯函数，Node 里能直接测）和
+ * **把它交给浏览器**（`download()`，要 document / URL）。文件名是在第二层
+ * 定的，所以这里塞一个最小的 document / URL 桩，把 `a.download` 抢下来 ——
+ * 只验「叫什么名字」，不验浏览器真有没有落盘。
+ *
+ * 桩里把 `setTimeout` 也换成空转：`download()` 末尾挂了一个 10 秒后回收
+ * blob 的定时器，真让它跑会在 URL 已经撤掉之后抛错，还拖着测试进程不退出。
+ *
+ * @param {Function} fn 里面调 Exporter 的某个导出函数
+ */
+function captureDownload(fn) {
+  var captured = null;
+  var savedDoc = typeof global.document === 'undefined' ? undefined : global.document;
+  var savedURL = typeof global.URL === 'undefined' ? undefined : global.URL;
+  var savedTimeout = global.setTimeout;
+
+  global.document = {
+    createElement: function () {
+      return {
+        style: {},
+        href: '',
+        download: '',
+        click: function () { captured = this.download; }
+      };
+    },
+    body: { appendChild: function () {}, removeChild: function () {} }
+  };
+  global.URL = {
+    createObjectURL: function () { return 'blob:test'; },
+    revokeObjectURL: function () {}
+  };
+  global.setTimeout = function () { return 0; };
+
+  try {
+    fn();
+  } finally {
+    if (savedDoc === undefined) delete global.document; else global.document = savedDoc;
+    if (savedURL === undefined) delete global.URL; else global.URL = savedURL;
+    global.setTimeout = savedTimeout;
+  }
+  return captured;
+}
+
 module.exports = {
   group: group,
   test: test,
@@ -160,5 +210,6 @@ module.exports = {
   assertNull: assertNull,
   assertThrows: assertThrows,
   summary: summary,
-  createMemoryStorage: createMemoryStorage
+  createMemoryStorage: createMemoryStorage,
+  captureDownload: captureDownload
 };

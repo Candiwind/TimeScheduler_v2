@@ -43,7 +43,10 @@ t('空一天 → 空分组', function () {
 
 t('没设时段的任务不进任何组', function () {
   var data = Store.createEmpty();
-  TaskOps.addTask(data, DATE, 'I', '没时段的');
+  var id = TaskOps.addTask(data, DATE, 'I', '没时段的').task.id;
+  // v2.12 需求 8 起，新任务**一定**带时段（第一、三象限按钟点，二、四象限晚上），
+  // 所以这里显式清掉时段，测的才是「数据里真没有时段的进不进组」
+  TaskOps.setSlot(data, DATE, 'I', id, null);
 
   h.assertEqual(TaskOps.getTimeView(data, DATE).length, 0);
 });
@@ -94,7 +97,11 @@ t('有阶段的任务：进组的是设了 slot 的阶段，任务本体不进',
   var data = Store.createEmpty();
   var taskId = TaskOps.addTask(data, DATE, 'I', '写季度报告').task.id;
   var s1 = TaskOps.addStage(data, DATE, 'I', taskId, '收集数据').stage.id;
-  TaskOps.addStage(data, DATE, 'I', taskId, '写初稿');
+  var s2 = TaskOps.addStage(data, DATE, 'I', taskId, '写初稿').stage.id;
+  // v2.12 需求 8：新阶段也自动带时段 —— 先把两条都清掉，再只给 s1 设上午，
+  // 这样验证的才是「没设时段的那种阶段不进组」
+  TaskOps.setStageSlot(data, DATE, 'I', taskId, s1, null);
+  TaskOps.setStageSlot(data, DATE, 'I', taskId, s2, null);
   TaskOps.setStageSlot(data, DATE, 'I', taskId, s1, '上午');
 
   var groups = TaskOps.getTimeView(data, DATE);

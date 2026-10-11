@@ -112,11 +112,24 @@ t('时间视图只在 time 模式下显示，象限 / 模板反过来', function
     '时间视图下模板该藏起来');
 });
 
-t('切回来能恢复：四个板块都有 [hidden] 的 display:none 守卫', function () {
+t('切回来能恢复：每个板块都有 [hidden] 的 display:none 守卫', function () {
   // .quadrants 自己写了 display:grid，作者样式赢过浏览器默认的 [hidden]
-  ['quadrants', 'timeview', 'pool', 'templates', 'reading'].forEach(function (id) {
+  ['quadrants', 'timeview', 'pool', 'templates', 'reading',
+   // v2.12 的三个新板块
+   'principles', 'skills', 'files'].forEach(function (id) {
     h.assertTrue(css.indexOf('.' + id + '[hidden]') !== -1,
       '缺 .' + id + '[hidden] 守卫 —— 切视图后这个板块会赖着不走');
+  });
+});
+
+t('三个新板块在两个视图下都露着（它们不属于任何一个视图）', function () {
+  // 和计划池 / 阅读栏同一条：跟日期、跟象限无关的全局清单，藏起来用户就点不到
+  var body = fnBody('setViewMode');
+  ['principles', 'skills', 'files'].forEach(function (id) {
+    h.assertTrue(body.indexOf('el.' + id + '.hidden = false') !== -1,
+      'setViewMode 没有「' + id + ' 一直显示」那句');
+    h.assertFalse(new RegExp('el\\.' + id + '\\.hidden = isTime').test(body),
+      id + ' 不能跟着视图藏起来');
   });
 });
 
@@ -131,10 +144,11 @@ t('阅读栏在两个视图下都露着（它不属于任何一个视图）', fu
 // ---------------------------------------------------------------------------
 h.group('板块收起（v2.8 需求 3）：三个板块都要能收，且记在本机');
 
-t('三个板块（阅读栏 / 计划池 / 模板池）的头上都有收起三角', function () {
-  var NodeSource = renderSrc;
-  ['reading', 'pool', 'templates'].forEach(function (id) {
-    h.assertTrue(NodeSource.indexOf("panelToggleHtml('" + id + "'") !== -1,
+t('六个板块的头上都有收起三角', function () {
+  // v2.12 需求 10：新加的三个板块（原则池 / 技能池 / 小文件）都要能收起，
+  // 不然「各个板块都要默认关闭状态」这条对它们不成立
+  ['reading', 'pool', 'templates', 'principles', 'skills', 'files'].forEach(function (id) {
+    h.assertTrue(renderSrc.indexOf("panelToggleHtml('" + id + "'") !== -1,
       'render.js 里 ' + id + ' 的头上没有收起三角');
   });
 });
@@ -152,11 +166,48 @@ t('render 主流程会调 setCollapsedPanels（换视图 / 重画都得跟上）
     'render 没把收起状态画上去，刷新后就白记了');
 });
 
-t('index.html 里三个板块都是 section（收起三角挂在各自头上）', function () {
-  ['reading', 'pool', 'templates'].forEach(function (id) {
+t('index.html 里每个板块都是 section（收起三角挂在各自头上）', function () {
+  ['reading', 'pool', 'templates', 'principles', 'skills', 'files'].forEach(function (id) {
     h.assertTrue(html.indexOf('<section id="' + id + '"') !== -1,
       '#' + id + ' 该是个 section');
   });
+});
+
+t('三个新板块排在模板池后面，各只有一个 id', function () {
+  // v2.12 的三块都是「底部板块」，排在 #templates 之后（顺序由 FS 定的）
+  h.assertTrue(at('templates') < at('principles'), '#principles 该在 #templates 后面');
+  h.assertTrue(at('principles') < at('skills'), '#skills 该在 #principles 后面');
+  h.assertTrue(at('skills') < at('files'), '#files 该在 #skills 后面');
+
+  ['principles', 'skills', 'files'].forEach(function (id) {
+    var n = (html.match(new RegExp('id="' + id + '"', 'g')) || []).length;
+    h.assertEqual(n, 1, '#' + id + ' 出现了 ' + n + ' 次（id 必须唯一）');
+  });
+});
+
+t('小文件的导入用的是隐藏的 txt 文件选择框（只接受 .txt）', function () {
+  h.assertTrue(html.indexOf('id="file-text-input"') !== -1);
+  h.assertTrue(/id="file-text-input"[^>]*accept="\.txt,text\/plain"/.test(html),
+    'accept 该只留 txt（需求 2「只支持 txt 格式」）');
+});
+
+t('JS 里 getElementById 找的每个 id，index.html 里都得真有', function () {
+  // 一个字母打错（files / fileS）的后果是那个板块**整个不工作**：找不到元素就
+  // 直接 return，面板永远是空的、点了没反应，控制台一声不吭。这类错肉眼很难发现，
+  // 所以做一次静态交叉核对（新加板块时最有用）。
+  var sources = ['render.js', 'app.js', 'date-nav.js', 'theme.js', 'toast.js']
+    .map(function (f) { return fs.readFileSync(path.join(ROOT, 'js', f), 'utf8'); })
+    .join('\n');
+
+  var re = /getElementById\('([^']+)'\)/g;
+  var m;
+  var checked = 0;
+  while ((m = re.exec(sources)) !== null) {
+    checked++;
+    h.assertTrue(html.indexOf('id="' + m[1] + '"') !== -1,
+      'JS 找 id="' + m[1] + '"，index.html 里没有这个元素');
+  }
+  h.assertTrue(checked >= 20, '扫到的 id 太少了（' + checked + '），正则该跟着实现更新');
 });
 
 // ---------------------------------------------------------------------------

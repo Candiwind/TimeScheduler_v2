@@ -363,6 +363,8 @@ var Render = (function (CONFIG, Util) {
     view = view || {};
     var editing = view.editing || null;
     var progressOf = view.progressOf || fallbackProgress;
+    // 这一块收起来了没（v2.13）：折叠状态存在本机，渲染时由 app.js 传进来
+    var collapsed = !!(view.collapsedBoards && view.collapsedBoards[boardKey('q', quadrantId)]);
 
     // 编辑状态只作用于它自己那个象限
     var here = (editing && editing.quadrantId === quadrantId) ? editing : null;
@@ -413,8 +415,13 @@ var Render = (function (CONFIG, Util) {
     }
 
     return '' +
-      '<section class="quadrant quadrant--' + quad.id + '" data-quadrant="' + quad.id + '">' +
+      '<section class="quadrant quadrant--' + quad.id +
+        (collapsed ? ' is-collapsed' : '') +
+        '" data-quadrant="' + quad.id + '">' +
         '<header class="quadrant__head">' +
+          // 折叠三角（v2.13 需求）：每个象限自己收自己的，状态存本机、下次进来保持。
+          // 放在名字左边，和六个大板块的收起三角同一个位置感
+          boardToggleHtml(boardKey('q', quad.id), view.collapsedBoards) +
           '<span class="quadrant__name">' +
             '<i class="quadrant__dot"></i>' +
             '<b class="quadrant__id">' + quad.id + '</b>' +
@@ -512,6 +519,11 @@ var Render = (function (CONFIG, Util) {
           '<span class="pool__text">' + Util.escapeHtml(task.text) + '</span>' +
           // v2.11 需求 1/2（见 DS 2.46）：右侧这串控件收进一个组
           '<span class="task__actions">' +
+          // Bonus（v2.12 需求 11）：池里的条目**保留** 🎁 标识 —— 从象限推迟
+          // 进来的 Bonus 任务，在池里也一眼看得出它是「额外加分」那一类。
+          // 和时间视图一样只做展示（池内改 Bonus 的入口不在本版范围内，
+          // 池里不画时段 / 阶段的取舍见 D-61）
+          (task.bonus === true ? '<span class="bonus__mark" title="Bonus">🎁</span>' : '') +
           dateHtml +
           // v2.6 需求 2：把这条（含全部阶段）导入当前查看日期的第二象限。
           // 是**移动**不是复制 —— 池里不再保留（见 DS 2.31）
@@ -623,6 +635,37 @@ var Render = (function (CONFIG, Util) {
   }
 
   /**
+   * 板块在 collapsedBoards 那张表里的键（v2.13，见 DS 2.58）。
+   *
+   * 两种板共用一张表，靠前缀区分（和落点对象用 region 区分象限 / 池是同一种做法）：
+   *   - 象限：`q:I` / `q:II` / `q:III` / `q:IV`
+   *   - 时段块：`tv:早上` … `tv:晚上`
+   * 前缀里的时段名会进本机存储，所以和 slot 一样**定了就别改**。
+   */
+  function boardKey(prefix, id) {
+    return prefix + ':' + id;
+  }
+
+  /**
+   * 一块「板」的折叠三角（v2.13）：四象限的每一个象限、时间视图的每一个时段块。
+   *
+   * 和 panelToggleHtml 长得一样、管的东西不同：
+   *   - `panel__toggle` 管六个大板块（计划池 / 模板池 / 阅读栏 / 原则池 / 技能池 /
+   *     小文件），data-panel 在 CONFIG.PANEL_IDS 白名单里，**默认收起**；
+   *   - `board__toggle` 管象限和时段块，data-board 是 `q:<象限>` / `tv:<时段>`，
+   *     **默认展开**（一进 App 就该看见今天的任务）。
+   * 两者都只改界面状态（存本机、下次进来保持），保护模式下照常能点。
+   * 朝向和 panelToggleHtml 一样交给 CSS 转（`.is-collapsed .board__toggle`）。
+   */
+  function boardToggleHtml(boardId, collapsedBoards) {
+    var collapsed = !!(collapsedBoards && collapsedBoards[boardId]);
+    var label = collapsed ? '展开' : '折叠';
+    return '<button type="button" class="board__toggle" data-board="' +
+      Util.escapeHtml(boardId) + '" aria-expanded="' + (collapsed ? 'false' : 'true') +
+      '" title="' + label + '" aria-label="' + label + '">▾</button>';
+  }
+
+  /**
    * 计划池整块的 HTML（#pool 的 innerHTML，见 DS 2.11）。
    * 空池给一句占位，告诉用户东西从哪儿进来。
    */
@@ -704,9 +747,14 @@ var Render = (function (CONFIG, Util) {
     for (var i = 0; i < list.length; i++) {
       var group = list[i];
       var icon = CONFIG.SLOT_ICONS[group.slot] || '';
+      // 这一块收起来了没（v2.13）：时段块和象限一样，各收各的、状态存本机
+      var collapsed = !!(view.collapsedBoards && view.collapsedBoards[boardKey('tv', group.slot)]);
 
-      html += '<section class="timeview__group" data-slot="' + Util.escapeHtml(group.slot) + '">' +
-        '<h2 class="timeview__title">' + icon + ' ' + Util.escapeHtml(group.slot) +
+      html += '<section class="timeview__group' + (collapsed ? ' is-collapsed' : '') +
+        '" data-slot="' + Util.escapeHtml(group.slot) + '">' +
+        '<h2 class="timeview__title">' +
+          boardToggleHtml(boardKey('tv', group.slot), view.collapsedBoards) +
+          icon + ' ' + Util.escapeHtml(group.slot) +
           '<span class="timeview__count">' + group.items.length + '</span>' +
         '</h2>' +
         '<ul class="timeview__list">';
@@ -811,7 +859,16 @@ var Render = (function (CONFIG, Util) {
   // 模板面板（DS 2.14）
   // -------------------------------------------------------------------------
 
-  /** 一条模板的 HTML。改名模式整条收成输入框（复用 task__input，键盘 / 失焦逻辑共用） */
+  /**
+   * 一条模板的 HTML。改名模式整条收成输入框（复用 task__input，键盘 / 失焦逻辑共用）。
+   *
+   * v2.12 需求 6：「改成**单击改名**，双击 Highlight」—— 所以
+   *   - 名字本身就是改名入口（点一下变输入框），那个单独的「改名」按钮去掉了
+   *     （留着两个入口只会让人犹豫点哪个），和任务「点文字改名」是同一套手感；
+   *   - 连续双击整条 → 高亮，落点是模板自己的 `highlight` 字段，和使用方式
+   *     与任务的高亮一模一样（浅橙底、完成后失效那套在模板上没有「完成」，
+   *     所以永远显色，见 DS 2.40 / 2.52）。
+   */
   function buildTemplateItemHtml(tpl, editing) {
     var id = Util.escapeHtml(tpl.id);
 
@@ -826,13 +883,15 @@ var Render = (function (CONFIG, Util) {
     }
 
     return '' +
-      '<li class="tpl__item" data-id="' + id + '">' +
+      '<li class="tpl__item' +
+        // 高亮（v2.12 需求 6）：和任务同一条 CSS（底色画在名字那段文字上）
+        (tpl.highlight === true ? ' tpl__item--highlight' : '') +
+        '" data-id="' + id + '">' +
         '<div class="task__row">' +
-          '<span class="tpl__name">' + Util.escapeHtml(tpl.name) + '</span>' +
+          '<span class="tpl__name" title="点击改名，双击高亮">' +
+            Util.escapeHtml(tpl.name) + '</span>' +
           '<button type="button" class="tpl__apply" title="填充到当前查看的日期"' +
             ' aria-label="应用到当前日期">应用</button>' +
-          '<button type="button" class="tpl__rename" title="重命名"' +
-            ' aria-label="重命名模板">改名</button>' +
           '<button type="button" class="tpl__del" title="删除"' +
             ' aria-label="删除模板">×</button>' +
         '</div>' +
@@ -1008,6 +1067,266 @@ var Render = (function (CONFIG, Util) {
   }
 
   // ===========================================================================
+  // 原则池 / 技能池 / 小文件（v2.12 需求 3 / 需求 4 / 需求 2，见 DS 2.48-2.50）
+  // ===========================================================================
+
+  /**
+   * 原则池（v2.12 需求 3）：像阅读栏，但没有**任何日期**。
+   *
+   * 上下两段：正在遵循（勾一下就归档）和**参考原则**（归档那段的名字是需求
+   * 点名的，不能改叫别的）。归档条目可以「↩」放回来 —— 点错了得有退路，
+   * 和阅读栏的 D-65 是同一条考虑。
+   */
+  function buildPrincipleItemHtml(item, editing, archived) {
+    var id = Util.escapeHtml(item.id);
+
+    if (editing && editing.mode === 'edit-principle' && editing.principleId === item.id) {
+      return '<li class="principles__item' +
+        (archived ? ' principles__item--archived' : '') +
+        ' principles__item--editing" data-id="' + id + '">' +
+          '<div class="task__row">' +
+            '<input type="text" class="task__input" value="' +
+              Util.escapeHtml(item.text) + '" maxlength="500" aria-label="编辑原则">' +
+          '</div></li>';
+    }
+
+    var left = archived
+      ? '<button type="button" class="principles__restore"' +
+          ' title="放回正在遵循" aria-label="放回正在遵循">↩</button>'
+      : '<input type="checkbox" class="principles__check" aria-label="归档到参考原则">';
+
+    return '<li class="principles__item' +
+      (archived ? ' principles__item--archived' : '') + '" data-id="' + id + '">' +
+        '<div class="task__row">' +
+          left +
+          '<span class="principles__text">' + Util.escapeHtml(item.text) + '</span>' +
+          '<button type="button" class="principles__del"' +
+            ' aria-label="删除原则">×</button>' +
+        '</div></li>';
+  }
+
+  /** 原则池整块：头部（收起三角 + 名称 + 计数 + 「＋」）+ 两段列表 */
+  function buildPrinciplesHtml(principles, view) {
+    view = view || {};
+    var editing = view.editing || null;
+    var src = (principles && typeof principles === 'object') ? principles : {};
+    var active = Array.isArray(src.active) ? src.active : [];
+    var archived = Array.isArray(src.archived) ? src.archived : [];
+
+    var head = '<header class="principles__head">' + panelToggleHtml('principles', view) +
+      '<span class="principles__name">⚖ 原则池</span>' +
+      '<span class="principles__count" title="正在遵循 / 参考原则">' +
+        active.length + ' / ' + archived.length + '</span>' +
+      '<button type="button" class="principles__add"' +
+        ' title="添加一条原则" aria-label="添加原则">＋</button>' +
+      '</header>';
+
+    var adding = !!(editing && editing.mode === 'add-principle');
+    var addRow = adding
+      ? '<li class="principles__item principles__item--editing">' +
+          '<div class="task__row">' +
+            '<input type="text" class="task__input" value=""' +
+              ' maxlength="500" placeholder="写一条原则，回车确认" aria-label="新原则">' +
+          '</div>' +
+        '</li>'
+      : '';
+
+    if (!active.length && !archived.length && !adding) {
+      return head + '<p class="principles__empty">还没有原则。点右上角「＋」记一条，' +
+        '不再遵循时勾掉它，它就会落到下面的「参考原则」里。</p>';
+    }
+
+    var rows = '';
+    for (var i = 0; i < active.length; i++) {
+      rows += buildPrincipleItemHtml(active[i], editing, false);
+    }
+    rows += addRow;
+
+    var html = head +
+      '<ul class="principles__list">' +
+        (rows || '<li class="principles__none">暂时没有正在遵循的原则</li>') +
+      '</ul>';
+
+    var archivedRows = '';
+    for (var k = 0; k < archived.length; k++) {
+      archivedRows += buildPrincipleItemHtml(archived[k], editing, true);
+    }
+
+    html += '<div class="principles__archived">' +
+      '<p class="principles__subtitle">参考原则' +
+        '<span class="principles__archived-count">' +
+          (archived.length ? String(archived.length) : '') + '</span></p>' +
+      (archived.length
+        ? '<ul class="principles__archived-list">' + archivedRows + '</ul>'
+        : '<p class="principles__archived-empty">还没有归档的原则。' +
+          '勾掉上面某一条，它就会出现在这里。</p>') +
+      '</div>';
+
+    return html;
+  }
+
+  /**
+   * 技能池（v2.12 需求 4）：一条技能 = 文字 + 一个日期。
+   *
+   * 日期那个按钮和计划池的完成时间、阅读栏的起始日期**是同一套控件**
+   * （点一下原地换成日期框，「清除」清成未设定，见 D-70）—— 三处一个长相，
+   * 用户不用为同一个动作学三种手感。
+   */
+  function buildSkillItemHtml(item, editing) {
+    var id = Util.escapeHtml(item.id);
+    var text = Util.escapeHtml(item.text);
+
+    if (editing && editing.mode === 'edit-skill' && editing.skillId === item.id) {
+      return '<li class="skills__item skills__item--editing" data-id="' + id + '">' +
+          '<div class="task__row">' +
+            '<input type="text" class="task__input" value="' + text + '"' +
+              ' maxlength="500" aria-label="编辑技能">' +
+          '</div></li>';
+    }
+
+    if (editing && editing.mode === 'edit-skill-date' && editing.skillId === item.id) {
+      return '<li class="skills__item skills__item--editing" data-id="' + id + '">' +
+          '<div class="task__row">' +
+            '<input type="date" class="skills__date-input" value="' +
+              Util.escapeHtml(item.date || '') + '" aria-label="设定技能日期">' +
+            '<button type="button" class="skills__date-clear"' +
+              ' title="清空日期" aria-label="清空日期">清除</button>' +
+          '</div></li>';
+    }
+
+    var dateHtml = item.date
+      ? '<button type="button" class="skills__date" title="修改日期"' +
+        ' aria-label="修改日期">' + Util.escapeHtml(item.date) + '</button>'
+      : '<button type="button" class="skills__date skills__date--empty" title="设定日期"' +
+        ' aria-label="设定日期">未设定</button>';
+
+    return '<li class="skills__item" data-id="' + id + '">' +
+        '<div class="task__row">' +
+          '<span class="skills__text">' + text + '</span>' +
+          dateHtml +
+          '<button type="button" class="skills__del"' +
+            ' aria-label="删除技能">×</button>' +
+        '</div></li>';
+  }
+
+  /** 技能池整块：头部（收起三角 + 名称 + 计数 + 「＋」）+ 列表 */
+  function buildSkillsHtml(skills, view) {
+    view = view || {};
+    var editing = view.editing || null;
+    var list = Array.isArray(skills) ? skills : [];
+
+    var head = '<header class="skills__head">' + panelToggleHtml('skills', view) +
+      '<span class="skills__name">🛠 技能池</span>' +
+      '<span class="skills__count">' + (list.length ? String(list.length) : '') + '</span>' +
+      '<button type="button" class="skills__add"' +
+        ' title="添加一条技能" aria-label="添加技能">＋</button>' +
+      '</header>';
+
+    var adding = !!(editing && editing.mode === 'add-skill');
+    var addRow = adding
+      ? '<li class="skills__item skills__item--editing">' +
+          '<div class="task__row">' +
+            '<input type="text" class="task__input" value=""' +
+              ' maxlength="500" placeholder="新 get 到的技能，回车确认" aria-label="新技能">' +
+          '</div>' +
+        '</li>'
+      : '';
+
+    if (!list.length && !adding) {
+      return head + '<p class="skills__empty">还没有记录技能。点右上角「＋」把新学到的' +
+        '东西记下来，日期默认是今天，随时可以改。</p>';
+    }
+
+    var rows = '';
+    for (var i = 0; i < list.length; i++) {
+      rows += buildSkillItemHtml(list[i], editing);
+    }
+    return head + '<ul class="skills__list">' + rows + addRow + '</ul>';
+  }
+
+  /**
+   * 小文件（v2.12 需求 2）：只支持 txt。
+   *
+   * 头部报用量（`3/10 个文件 · 12KB / 1MB`）：需求说「提示总共不能超过 1M 空间
+   * 或 10 个文件」，所以这是个**软提示** —— 超了只是把数字标红，照样存得下
+   * （和阅读栏的「建议不超过 3 项」同一条口径，见 D-64）。
+   *
+   * 点文件名字 = 打开内容编辑器（文件的主要内容就是它的正文），改名用行尾的
+   * 「✎」，导出用「导出」（需求：像任务信息一样能导入导出，只支持 txt）。
+   */
+  function buildFileItemHtml(file, editing) {
+    var id = Util.escapeHtml(file.id);
+
+    if (editing && editing.mode === 'rename-file' && editing.fileId === file.id) {
+      return '<li class="files__item files__item--editing" data-id="' + id + '">' +
+          '<div class="task__row">' +
+            '<input type="text" class="files__name-input" value="' +
+              Util.escapeHtml(file.name) + '" maxlength="80" aria-label="编辑文件名">' +
+          '</div></li>';
+    }
+
+    return '<li class="files__item" data-id="' + id + '">' +
+        '<div class="task__row">' +
+          '<button type="button" class="files__open" title="查看 / 编辑内容"' +
+            ' aria-label="查看或编辑文件内容">📄 ' + Util.escapeHtml(file.name) + '</button>' +
+          '<button type="button" class="files__rename" title="重命名"' +
+            ' aria-label="重命名文件">✎</button>' +
+          '<button type="button" class="files__export" title="导出为 txt"' +
+            ' aria-label="导出为 txt">导出</button>' +
+          '<button type="button" class="files__del" aria-label="删除文件">×</button>' +
+        '</div></li>';
+  }
+
+  /** 小文件整块：头部（收起三角 + 名称 + 用量 + 导入 / ＋）+ 列表 */
+  function buildFilesHtml(files, view) {
+    view = view || {};
+    var editing = view.editing || null;
+    var list = Array.isArray(files) ? files : [];
+    var stats = (view && view.fileStats) || null;
+
+    var usage = '';
+    if (stats) {
+      var kb = Math.round((stats.bytes / 1024) * 10) / 10;
+      usage = '<span class="files__usage' +
+        (stats.over ? ' files__usage--over' : '') +
+        // 提示语和两条软线都取自 CONFIG（改上限只改一处）
+        '" title="提示：' + Util.escapeHtml(CONFIG.FILES_HINT) + '">' +
+        (list.length ? String(list.length) : '0') + '/' + stats.maxCount + ' 个文件 · ' +
+        kb + 'KB / ' + Math.round(stats.maxBytes / 1024 / 1024) + 'MB</span>';
+    }
+
+    var head = '<header class="files__head">' + panelToggleHtml('files', view) +
+      '<span class="files__name">📄 小文件</span>' +
+      usage +
+      '<button type="button" class="files__load"' +
+        ' title="导入一个 .txt 文件" aria-label="导入 txt 文件">导入</button>' +
+      '<button type="button" class="files__add"' +
+        ' title="新建一个空文件" aria-label="新建文件">＋</button>' +
+      '</header>';
+
+    var adding = !!(editing && editing.mode === 'add-file');
+    var addRow = adding
+      ? '<li class="files__item files__item--editing">' +
+          '<div class="task__row">' +
+            '<input type="text" class="files__name-input" value="新文件.txt"' +
+              ' maxlength="80" placeholder="文件名，回车确认" aria-label="新文件名">' +
+          '</div>' +
+        '</li>'
+      : '';
+
+    if (!list.length && !adding) {
+      return head + '<p class="files__empty">还没有小文件。点「导入」收一个 .txt 进来，' +
+        '或点「＋」新建一个空的（内容点文件名进去写）。</p>';
+    }
+
+    var rows = '';
+    for (var i = 0; i < list.length; i++) {
+      rows += buildFileItemHtml(list[i], editing);
+    }
+    return head + '<ul class="files__list">' + rows + addRow + '</ul>';
+  }
+
+  // ===========================================================================
   // DOM 部分：把这些字符串塞进页面
   // ===========================================================================
 
@@ -1024,6 +1343,10 @@ var Render = (function (CONFIG, Util) {
     el.reading = document.getElementById('reading');
     el.timeview = document.getElementById('timeview');
     el.templates = document.getElementById('templates');
+    // v2.12 的三个板块（需求 2/3/4）：和阅读栏 / 计划池一样，两个视图都露着
+    el.principles = document.getElementById('principles');
+    el.skills = document.getElementById('skills');
+    el.files = document.getElementById('files');
     el.toastHost = document.getElementById('toast-host');
     return Render;
   }
@@ -1058,6 +1381,24 @@ var Render = (function (CONFIG, Util) {
     el.reading.innerHTML = buildReadingHtml(reading, view);
   }
 
+  /** 画出原则池（v2.12 需求 3）：view.principles = { active, archived } */
+  function renderPrinciples(principles, view) {
+    if (!el.principles) return;
+    el.principles.innerHTML = buildPrinciplesHtml(principles, view);
+  }
+
+  /** 画出技能池（v2.12 需求 4）：view.skills 是数据里的 skills 数组 */
+  function renderSkills(skills, view) {
+    if (!el.skills) return;
+    el.skills.innerHTML = buildSkillsHtml(skills, view);
+  }
+
+  /** 画出小文件（v2.12 需求 2）：用量统计由 app.js 算好放在 view.fileStats */
+  function renderFiles(files, view) {
+    if (!el.files) return;
+    el.files.innerHTML = buildFilesHtml(files, view);
+  }
+
   /**
    * 板块收起（v2.8 需求 3）：把 is-collapsed 落到三个板块元素上。
    *
@@ -1088,6 +1429,11 @@ var Render = (function (CONFIG, Util) {
     if (el.reading) el.reading.hidden = false;
     if (el.templates) el.templates.hidden = isTime;
     if (el.timeview) el.timeview.hidden = !isTime;
+    // 原则池 / 技能池 / 小文件（v2.12）和阅读栏同待遇：两个视图都露着 ——
+    // 它们跟日期、跟象限都无关，藏起来用户就点不到「归档」「改日期」了
+    if (el.principles) el.principles.hidden = false;
+    if (el.skills) el.skills.hidden = false;
+    if (el.files) el.files.hidden = false;
   }
 
   /**
@@ -1106,14 +1452,20 @@ var Render = (function (CONFIG, Util) {
     if (el.reading) hosts.push(el.reading);
     if (el.pool) hosts.push(el.pool);
     if (el.templates) hosts.push(el.templates);
+    if (el.principles) hosts.push(el.principles);
+    if (el.skills) hosts.push(el.skills);
+    if (el.files) hosts.push(el.files);
 
     var input = null;
     for (var i = 0; i < hosts.length && !input; i++) {
       // 一次列全所有编辑框的输入框。**屏幕上同时只有一个编辑框**（state.editing
       // 是单个对象，渲染也只画一处），所以不必按 mode 逐个挑 —— 那种写法每加一种
       // 编辑框都得回来补一笔，漏了就静默失效（见 DS R-40）。
+      // v2.12 又多了一个 skills__date-input（技能池的日期，和池 / 阅读栏同一个框）；
+      // test-reading.js 的自动守卫盯着这份清单，新加输入框而忘了登记会当场红。
       input = hosts[i].querySelector(
-        '.task__input, .stage__input, .pool__date-input, .reading__start-input');
+        '.task__input, .stage__input, .pool__date-input, .reading__start-input, ' +
+        '.skills__date-input, .files__name-input');
     }
     if (!input) return;
     input.focus();
@@ -1135,13 +1487,17 @@ var Render = (function (CONFIG, Util) {
     el.statRate.textContent = formatRate(done, den);
   }
 
-  /** 整页重画（view.pool 带计划池、view.templates 带模板数据时就连着一起画） */
+  /** 整页重画（view 里带着各全局板块的数据时就连着一起画） */
   function render(day, stats, view) {
     renderQuadrants(day, view);
     renderStats(stats);
     renderPool(view && view.pool, view);
     renderReading(view && view.reading, view);
     renderTemplates(view && view.templates, view);
+    // v2.12 的三个板块（原则池 / 技能池 / 小文件）
+    renderPrinciples(view && view.principles, view);
+    renderSkills(view && view.skills, view);
+    renderFiles(view && view.files, view);
     // 收起状态一并在重画时落下去：换视图 / 改数据都不该把收起的面板弹开
     setCollapsedPanels(view && view.collapsedPanels);
   }
@@ -1219,7 +1575,14 @@ var Render = (function (CONFIG, Util) {
     { key: 'pb',  sel: '.pool__list',         scope: null,               attr: null },
     { key: 'tpl', sel: '.tpl__list',          scope: null,               attr: null },
     { key: 'rd',  sel: '.reading__list',      scope: null,               attr: null },
-    { key: 'rdd', sel: '.reading__done-list', scope: null,               attr: null }
+    { key: 'rdd', sel: '.reading__done-list', scope: null,               attr: null },
+    // v2.12 的三个板块（原则池两段、技能池、小文件）：各只有一份，用固定键。
+    // 这张表是「勾完不弹回顶部」的全部依据 —— 少登记一行，那个列表勾一下
+    // 还是会跳回顶部，而 test-scroll-keep.js 会拿样式表交叉核对，漏了就红
+    { key: 'pr',  sel: '.principles__list',          scope: null, attr: null },
+    { key: 'pra', sel: '.principles__archived-list', scope: null, attr: null },
+    { key: 'sk',  sel: '.skills__list',              scope: null, attr: null },
+    { key: 'fl',  sel: '.files__list',               scope: null, attr: null }
   ];
 
   /** 一个滚动元素对应哪个键；定不出键（祖先属性缺了）就返回 null，跳过 */
@@ -1481,6 +1844,67 @@ var Render = (function (CONFIG, Util) {
     document.addEventListener('keydown', onKeyDown);
   }
 
+  /**
+   * 弹一个**可编辑**的文本框，让用户改一段长文本（v2.12 需求 2：小文件的正文）。
+   *
+   * 和 openText（只读、用来复制）是一对：那个是「把内容给你」，这个是「让你改」。
+   * 内容用 textarea 的 value 装，天然不会当成 HTML —— 不给 XSS 留缝（同 openText）。
+   *
+   * @param {Object} options { title, message }
+   * @param {string} text 初始内容
+   * @param {Function} onSave 点了「保存」才回调，参数是改完的文本；取消不回调
+   */
+  function openEditor(options, text, onSave) {
+    options = options || {};
+    var host = ensureConfirmHost();
+
+    host.innerHTML = '' +
+      '<div class="modal__box modal__box--wide" role="dialog" aria-modal="true">' +
+        '<h2 class="modal__title">' + Util.escapeHtml(options.title || '') + '</h2>' +
+        (options.message
+          ? '<p class="modal__text">' + Util.escapeHtml(options.message) + '</p>'
+          : '') +
+        '<textarea class="modal__area files__text-input" rows="14" spellcheck="false"></textarea>' +
+        '<div class="modal__actions">' +
+          '<button type="button" class="btn" data-act="cancel">取消</button>' +
+          '<button type="button" class="btn btn--primary" data-act="save">保存</button>' +
+        '</div>' +
+      '</div>';
+    host.hidden = false;
+
+    var area = host.querySelector('.modal__area');
+    area.value = typeof text === 'string' ? text : '';
+    area.focus();
+
+    function close() {
+      host.hidden = true;
+      host.innerHTML = '';
+      host.removeEventListener('click', onClick);
+      document.removeEventListener('keydown', onKeyDown);
+    }
+
+    function onClick(e) {
+      var btn = (e.target && e.target.closest) ? e.target.closest('[data-act]') : null;
+      if (!btn) {
+        if (e.target === host) close();
+        return;
+      }
+      var act = btn.getAttribute('data-act');
+      var value = area.value;
+      close();
+      // 取消 = 一个字节都不动（同 openConfirm 的取舍）
+      if (act === 'save' && onSave) onSave(value);
+    }
+
+    function onKeyDown(e) {
+      // 这里是多行文本，回车必须留给换行 —— 只有 Esc 关闭（取消）
+      if (e.key === 'Escape') close();
+    }
+
+    host.addEventListener('click', onClick);
+    document.addEventListener('keydown', onKeyDown);
+  }
+
   /** 主题落到 <html data-theme="..."> 上，具体颜色由 CSS 变量决定 */
   function setTheme(theme) {
     document.documentElement.setAttribute('data-theme', theme);
@@ -1503,6 +1927,13 @@ var Render = (function (CONFIG, Util) {
     buildTemplateItemHtml: buildTemplateItemHtml,
     buildReadingHtml: buildReadingHtml,
     buildReadingItemHtml: buildReadingItemHtml,
+    // v2.12 的三个板块（需求 2/3/4）
+    buildPrinciplesHtml: buildPrinciplesHtml,
+    buildPrincipleItemHtml: buildPrincipleItemHtml,
+    buildSkillsHtml: buildSkillsHtml,
+    buildSkillItemHtml: buildSkillItemHtml,
+    buildFilesHtml: buildFilesHtml,
+    buildFileItemHtml: buildFileItemHtml,
     panelToggleHtml: panelToggleHtml,
     formatRate: formatRate,
     fallbackProgress: fallbackProgress,
@@ -1515,6 +1946,9 @@ var Render = (function (CONFIG, Util) {
     renderTimeView: renderTimeView,
     renderTemplates: renderTemplates,
     renderReading: renderReading,
+    renderPrinciples: renderPrinciples,
+    renderSkills: renderSkills,
+    renderFiles: renderFiles,
     setCollapsedPanels: setCollapsedPanels,
     setViewMode: setViewMode,
     renderStats: renderStats,
@@ -1529,7 +1963,8 @@ var Render = (function (CONFIG, Util) {
     restoreScroll: restoreScroll,
     openConfirm: openConfirm,
     openChoice: openChoice,
-    openText: openText
+    openText: openText,
+    openEditor: openEditor
   };
 })(
   typeof CONFIG !== 'undefined' ? CONFIG : require('./config.js'),

@@ -917,8 +917,9 @@ t('commitEdit 的新增分支收下**所有** add-* 模式（回归：回车没�
 
 t('收起状态要落本机（刷新后才记得住）', function () {
   h.assertTrue(appSrc.indexOf('collapsedPanels: state.collapsedPanels') !== -1);
-  h.assertTrue(appSrc.indexOf('state.collapsedPanels = fold.collapsedPanels;') !== -1,
-    '开机要把收起状态读回来');
+  h.assertTrue(
+    appSrc.indexOf('state.collapsedPanels = fold.collapsedPanels || defaultCollapsedPanels();') !== -1,
+    '开机要把收起状态读回来；没记录过时默认「六个板块全收起」（v2.12 需求 10）');
 });
 
 t('togglePanel 只认名单里的名字，脏 data-panel 直接忽略', function () {
@@ -943,8 +944,10 @@ t('阅读栏不参与拖拽 —— 它不是拖拽容器', function () {
     '阅读栏是纯列表，不该跟拖拽扯上关系');
 });
 
-t('CONFIG.PANEL_IDS 就是那三个板块', function () {
-  h.assertEqual(CONFIG.PANEL_IDS.join(','), 'reading,pool,templates');
+t('CONFIG.PANEL_IDS 就是那六个板块', function () {
+  // v2.12 需求 10：又多出原则池 / 技能池 / 小文件三个（都要能收起、都要记住状态）
+  h.assertEqual(CONFIG.PANEL_IDS.join(','),
+    'reading,pool,templates,principles,skills,files');
 });
 
 // ---------------------------------------------------------------------------

@@ -88,15 +88,37 @@ var CONFIG = (function () {
   var READING_ACTIVE_HINT = 3;
 
   // ---------------------------------------------------------------------------
-  // 可收起的三个板块（v2.8 需求 3）
+  // 可收起的板块（v2.8 需求 3；v2.12 需求 10 起六个板块都默认收起）
   //
-  // 阅读栏 / 计划池 / 模板池都能收起，收起状态记在本机、刷新后保持（存在
-  // foldState 那张表的 collapsedPanels 里，见 DS 2.38）。
+  // 阅读栏 / 计划池 / 模板池 / 原则池 / 技能池 / 小文件都能收起，收起状态记在
+  // 本机、刷新后保持（存在 foldState 那张表的 collapsedPanels 里，见 DS 2.38）。
+  //
+  // v2.12 需求 10：这些板块**默认是收起的**，用户点开哪个哪个才展开，之后再
+  // 刷新就照着上次的状态来。判断「用户从没动过」的办法见 store.getFoldState：
+  // 那种情况下 collapsedPanels 给 **null**（而不是空表），由 app.js 补上
+  // 「全都收起」这份默认值。
   //
   // 这几个串会写进用户的本地存储，并且和 HTML 上的 `data-panel` 一一对应 ——
   // 和象限 id 一样：**定了就别改**，改名等于用户的收起状态丢失。
   // ---------------------------------------------------------------------------
-  var PANEL_IDS = ['reading', 'pool', 'templates'];
+  var PANEL_IDS = ['reading', 'pool', 'templates', 'principles', 'skills', 'files'];
+
+  // ---------------------------------------------------------------------------
+  // 小文件（v2.12 需求 2）
+  //
+  // 「我存的一些小文件」：需求原话是「提示总共不能超过 1M 空间或 10 个文件」，
+  // 「提示」二字说明这是**软提示**——超了照样存得下，只在头部把用量标红提醒
+  // （和阅读栏的「建议不超过 3 项」同一条口径，见 D-64）。
+  //
+  // 为什么要留这个上限的提醒：主数据整份存在 localStorage 里，每次保存还会
+  // 轮转 4 份滚动备份 —— 塞进 1MB 文本就等于把本机配额翻几倍地吃掉，
+  // 配额满了会连带把正常的任务保存一起挡下来（见 DS 5.2 的风险条）。
+  // ---------------------------------------------------------------------------
+  var FILES_MAX_BYTES = 1024 * 1024;   // 1 MB（按 UTF-8 字节数算）
+  var FILES_MAX_COUNT = 10;
+
+  // 小文件面板顶部那句提示里的文案用的就是这个值，改这里就够了
+  var FILES_HINT = '建议总计不超过 1MB、10 个文件';
 
   // ---------------------------------------------------------------------------
   // 各种阈值和节流
@@ -145,6 +167,9 @@ var CONFIG = (function () {
     SCHEMA_VERSION: SCHEMA_VERSION,
     READING_ACTIVE_HINT: READING_ACTIVE_HINT,
     PANEL_IDS: PANEL_IDS,
+    FILES_MAX_BYTES: FILES_MAX_BYTES,
+    FILES_MAX_COUNT: FILES_MAX_COUNT,
+    FILES_HINT: FILES_HINT,
     BACKUP_COUNT: BACKUP_COUNT,
     BACKUP_THROTTLE_MS: BACKUP_THROTTLE_MS,
     SYNC_DEBOUNCE_MS: SYNC_DEBOUNCE_MS,

@@ -93,11 +93,23 @@ t('传空 / 缺字段 → 存成空表，读回也是空表', function () {
 // ---------------------------------------------------------------------------
 h.group('板块收起：和展开名单同一条路（v2.8 需求 3）');
 
-t('从没存过 → collapsedPanels 是空表', function () {
+t('从没存过 → collapsedPanels 是 null（「用户一次都没动过」）', function () {
+  // v2.12 需求 10：板块默认**全部收起**，所以这一档不能再给空表 ——
+  // 空表的意思是「六个板块都点开了」。给 null 才区分得开这两种情况，
+  // 由 app.js 补上默认的「全都收起」（见 DS 2.38 / 2.53）。
   fresh();
   var f = Store.getFoldState();
-  h.assertTrue(typeof f.collapsedPanels === 'object' && f.collapsedPanels !== null);
-  h.assertEqual(Object.keys(f.collapsedPanels).length, 0);
+  h.assertNull(f.collapsedPanels);
+});
+
+t('老版本存的 JSON 里没有 collapsedPanels → 同样当「没动过」', function () {
+  var storage = fresh();
+  storage.setItem(CONFIG.KEYS.foldState,
+    JSON.stringify({ expanded: { t1: true }, collapsedBlocks: {} }));
+
+  var f = Store.getFoldState();
+  h.assertNull(f.collapsedPanels);
+  h.assertEqual(f.expanded.t1, true, '别的字段照常读回来');
 });
 
 t('存了「计划池收起」→ 读回来还是收起的', function () {
@@ -133,13 +145,16 @@ t('收起名单和展开名单是两回事，各存各的', function () {
   h.assertEqual(f.collapsedPanels.pool, true);
 });
 
-t('collapsedPanels 是垃圾值 → 回空表，不崩', function () {
+t('collapsedPanels 是垃圾值 → 当「没动过」（null），不崩', function () {
+  // v2.12 需求 10：这份界面状态存坏了，最多回到默认的「六个板块全收起」，
+  // 绝不能连累主数据（和主题、展开名单同一条：界面状态存不上不是大事）
   var storage = fresh();
   storage.setItem(CONFIG.KEYS.foldState,
     JSON.stringify({ expanded: {}, collapsedBlocks: {}, collapsedPanels: '不是对象' }));
 
   var f = Store.getFoldState();
-  h.assertEqual(Object.keys(f.collapsedPanels).length, 0);
+  h.assertNull(f.collapsedPanels);
+  h.assertEqual(Object.keys(f.expanded).length, 0, '别的字段照常');
 });
 
 // ---------------------------------------------------------------------------
@@ -162,9 +177,8 @@ t('主数据对象里没有折叠状态字段', function () {
   fresh();
   var data = Store.createEmpty();
   var keys = Object.keys(data).sort();
-  h.assertEqual(keys.join(','), 'dates,pool,reading,schemaVersion,templates,user',
-    '折叠状态不进主数据（pool / templates 是 v1.1 的计划池 / 模板字段，' +
-    'reading 是 v2.8 的阅读栏）');
+  h.assertEqual(keys.join(','), 'dates,files,pool,principles,reading,schemaVersion,skills,templates,user',
+    '折叠状态不进主数据（pool / templates 是 v1.1 的计划池 / 模板字段，reading 是 v2.8 的阅读栏，principles / skills / files 是 v2.12 的三个板块）');
 });
 
 // ---------------------------------------------------------------------------
@@ -216,10 +230,18 @@ t('persistFoldState 把 collapsedPanels 一起存了', function () {
     '收起状态没跟着一起存 —— 刷新后收起的板块会自己弹开');
 });
 
-t('开机时把收起状态读回来', function () {
+t('开机时把收起状态读回来（没记录过 → 默认全收起）', function () {
+  // v2.12 需求 10：`|| defaultCollapsedPanels()` 那一半是这条需求的关键 ——
+  // 写成 `|| {}` 就变成「默认全展开」，和需求正好相反（见 DS 2.54 / D-85）
   var src = fs.readFileSync(path.join(__dirname, '..', 'js', 'app.js'), 'utf8');
-  h.assertTrue(src.indexOf('state.collapsedPanels = fold.collapsedPanels;') !== -1,
-    '读了不赋值，等于没记');
+  h.assertTrue(
+    src.indexOf('state.collapsedPanels = fold.collapsedPanels || defaultCollapsedPanels();') !== -1,
+    '读了不赋值、或者赋值时没有「默认全收起」这一半，等于没记 / 记反了');
+
+  var body = src.slice(src.indexOf('function defaultCollapsedPanels('));
+  body = body.slice(0, body.indexOf('\n  }'));
+  h.assertTrue(body.indexOf('CONFIG.PANEL_IDS') !== -1,
+    '默认值该按 CONFIG.PANEL_IDS 生成，别写死六个 id');
 });
 
 t('togglePanel 只认名单里的三个名字（DOM 传上来的值不可全信）', function () {

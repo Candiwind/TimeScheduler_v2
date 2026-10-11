@@ -259,6 +259,11 @@ var Exporter = (function (CONFIG, Util, Store, TaskOps) {
    *
    * 不传 dateStr 就导出**全部日期**——它是给存档用的，
    * 只存一天没什么意义。
+   *
+   * **只有四象限**（v2.12 需求 1，见 DS 2.46）：日报是「这一天干了什么」，
+   * 计划池 / 模板 / 阅读栏 / 原则池 / 技能池 / 小文件都跟某一天没有关系，
+   * 塞进来只会让日报多出几段和当天无关的内容。这条由 test-routine-scope.js
+   * 自动盯着（它扫 buildMarkdown / buildPrintHtml 的源码）。
    */
   function buildMarkdown(data, options) {
     options = options || {};
@@ -313,6 +318,75 @@ var Exporter = (function (CONFIG, Util, Store, TaskOps) {
         lines.push('');
       }
     }
+
+    return lines.join('\n');
+  }
+
+  // =========================================================================
+  // 清单导出（v2.12 需求 5，见 DS 2.51）
+  //
+  // 「允许导出技能池和已阅读书籍的清单为 txt / markdown 文件」——
+  // 这两份不是按天组织的日报，而是**一份可以带走的清单**，所以单独两个
+  // 生成函数，用 Markdown 列表（.md 文件；纯文本编辑器打开也是干净的列表）。
+  // =========================================================================
+
+  /** 一条清单行：`- 正文`，后面可挂一段括注（日期之类） */
+  function listLine(text, note) {
+    return '- ' + escapeMd(text) + (note ? '（' + escapeMd(note) + '）' : '');
+  }
+
+  /**
+   * 技能池清单。日期没设的就不画括注（不写「未设定」—— 清单是给人看的，
+   * 空着比写一句废话干净）。
+   */
+  function buildSkillsList(data) {
+    var skills = (data && Array.isArray(data.skills)) ? data.skills : [];
+    var lines = ['# 技能清单', ''];
+
+    if (!skills.length) {
+      lines.push('（技能池还是空的）');
+      lines.push('');
+      return lines.join('\n');
+    }
+
+    for (var i = 0; i < skills.length; i++) {
+      var s = skills[i];
+      if (!s || typeof s.text !== 'string') continue;
+      lines.push(listLine(s.text, Util.isValidDateStr(s.date) ? s.date : ''));
+    }
+    lines.push('');
+    return lines.join('\n');
+  }
+
+  /**
+   * 阅读清单：**只取「已读完成」那张表**（需求原话是「已阅读书籍的清单」，
+   * 「正在阅读」的不算「已读」—— 见 FS 三十一）。
+   *
+   * 完成日期和起始日期相同就只写一个（和阅读栏行上同一条：当天开始当天读完
+   * 画「X → X」是废信息，见 D-68）；起始没设过时也只写完成日期。
+   */
+  function buildReadingList(data) {
+    var reading = (data && data.reading && typeof data.reading === 'object') ? data.reading : {};
+    var done = Array.isArray(reading.done) ? reading.done : [];
+
+    var lines = ['# 已读书籍清单', ''];
+
+    if (!done.length) {
+      lines.push('（还没有读完的书）');
+      lines.push('');
+      return lines.join('\n');
+    }
+
+    for (var i = 0; i < done.length; i++) {
+      var b = done[i];
+      if (!b || typeof b.text !== 'string') continue;
+      var note = '';
+      if (b.start && b.doneAt && b.start !== b.doneAt) note = b.start + ' → ' + b.doneAt;
+      else if (b.doneAt) note = b.doneAt;
+      else if (b.start) note = b.start;
+      lines.push(listLine(b.text, note));
+    }
+    lines.push('');
 
     return lines.join('\n');
   }
@@ -424,6 +498,32 @@ var Exporter = (function (CONFIG, Util, Store, TaskOps) {
   }
 
   /**
+   * 导出技能池 / 已读书籍清单（v2.12 需求 5）。
+   * 文件名带日期，方便连着导好几份也分得清是哪天导的。
+   */
+  function exportSkills(data, when) {
+    download('技能清单-' + stamp(when) + '.md',
+      bytesToBlob(utf8Bytes(buildSkillsList(data)), 'text/markdown'));
+  }
+
+  function exportReadingList(data, when) {
+    download('已读书籍清单-' + stamp(when) + '.md',
+      bytesToBlob(utf8Bytes(buildReadingList(data)), 'text/markdown'));
+  }
+
+  /**
+   * 导出一个小文件（v2.12 需求 2）：内容原样写进一个 **.txt**。
+   *
+   * 「只支持 txt 格式」落在这里：文件名叫什么都不加后缀都会补成 .txt，
+   * 内容一个字不加（存进去什么样、导出来什么样）。
+   */
+  function exportTextFile(name, text) {
+    var filename = Util.safeFileName(name, 'untitled');
+    if (!Util.isTxtFileName(filename)) filename += '.txt';
+    download(filename, bytesToBlob(utf8Bytes(typeof text === 'string' ? text : ''), 'text/plain'));
+  }
+
+  /**
    * 导出 ZIP：JSON + Markdown 两件。
    * 里面没有 PDF —— 程序拿不到 PDF 的字节，这是硬限制（见 4.4、D-18）。
    */
@@ -471,6 +571,9 @@ var Exporter = (function (CONFIG, Util, Store, TaskOps) {
     buildMarkdown: buildMarkdown,
     escapeMd: escapeMd,
     statsLine: statsLine,
+    // 清单（v2.12 需求 5）：技能池 / 已读书籍
+    buildSkillsList: buildSkillsList,
+    buildReadingList: buildReadingList,
 
     // DOM
     download: download,
@@ -479,6 +582,9 @@ var Exporter = (function (CONFIG, Util, Store, TaskOps) {
     exportMarkdown: exportMarkdown,
     exportZip: exportZip,
     exportArchive: exportArchive,
+    exportSkills: exportSkills,
+    exportReadingList: exportReadingList,
+    exportTextFile: exportTextFile,
     handleCtrlS: handleCtrlS
   };
 })(
